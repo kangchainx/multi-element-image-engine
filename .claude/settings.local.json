@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(git -C /Users/chris/Documents/GitHub/multi-element-image-engine/meie-server log --oneline -10)",
+      "Bash(git -C /Users/chris/Documents/GitHub/multi-element-image-engine status:*)",
+      "Bash(git -C /Users/chris/Documents/GitHub/multi-element-image-engine/meie-server status)"
+    ]
+  }
+}

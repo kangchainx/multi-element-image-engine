@@ -1,0 +1,27 @@
+{
+  "name": "multi-element-image-engine",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Multi-Element Image Engine - ComfyUI integration with monorepo structure",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "dev": "npm run dev:server & npm run dev:ui",
+    "dev:server": "npm run dev --workspace=@meie/server",
+    "dev:ui": "npm run dev --workspace=@meie/ui",
+    "build": "npm run build --workspaces",
+    "build:server": "npm run build --workspace=@meie/server",
+    "build:ui": "npm run build --workspace=@meie/ui",
+    "type-check": "npm run type-check --workspaces --if-present"
+  },
+  "engines": {
+    "node": ">=18.0.0",
+    "npm": ">=7.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "typescript": "^5.3.0"
+  }
+}

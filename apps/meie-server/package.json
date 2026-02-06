@@ -1,0 +1,20 @@
+{
+  "name": "@meie/server",
+  "version": "1.0.0",
+  "type": "module",
+  "description": "Multi-Element Image Engine - Backend server for ComfyUI API integration",
+  "main": "demo.ts",
+  "scripts": {
+    "start": "tsx demo.ts",
+    "check": "tsx check-models.ts",
+    "build": "tsc",
+    "dev": "tsx watch demo.ts",
+    "type-check": "tsc --noEmit"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "devDependencies": {
+    "tsx": "^4.7.0"
+  }
+}
