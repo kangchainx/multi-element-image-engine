@@ -7,8 +7,19 @@ dist/
 build/
 *.tsbuildinfo
 
+# TypeScript compilation artifacts (keep package.json)
+*.js
+*.js.map
+*.d.ts
+*.d.ts.map
+!package.json
+!*.config.js
+!vite.config.ts
+
 # Environment variables
 .env
+.env.*
+!.env.example
 .env.local
 .env.*.local
 
