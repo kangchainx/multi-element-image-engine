@@ -2,13 +2,23 @@ import { readFile, writeFile } from 'fs/promises';
 
 const COMFYUI_API_BASE = 'http://127.0.0.1:8000';
 
+interface ComfyUIObjectInfo {
+  CheckpointLoaderSimple?: {
+    input?: {
+      required?: {
+        ckpt_name?: [string[]];
+      };
+    };
+  };
+}
+
 /**
  * 获取ComfyUI中所有可用的checkpoint模型
  */
 async function getAvailableModels(): Promise<string[]> {
   try {
     const response = await fetch(`${COMFYUI_API_BASE}/object_info/CheckpointLoaderSimple`);
-    const data = await response.json();
+    const data = await response.json() as ComfyUIObjectInfo;
 
     const models = data.CheckpointLoaderSimple?.input?.required?.ckpt_name?.[0] || [];
     return models;
