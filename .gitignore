@@ -54,3 +54,4 @@ temp/
 # Documentation (exclude root implementation docs)
 /*.md
 !/README.md
+.agent/
