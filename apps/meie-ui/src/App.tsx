@@ -4,7 +4,7 @@ import { MainCanvas } from './components/layout/MainCanvas';
 
 function App() {
   return (
-    <div className="flex flex-col h-screen w-full bg-ivory text-charcoal font-sans overflow-hidden">
+    <div className="flex flex-col h-screen w-full bg-page text-text-primary font-sans overflow-hidden">
       {/* Top Navigation */}
       <Header />
       

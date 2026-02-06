@@ -10,17 +10,14 @@ export const MainCanvas: React.FC = () => {
 
   return (
     <main className={clsx(
-      "flex-1 bg-ivory relative overflow-hidden flex flex-col",
-      // Add a subtle paper texture overlay or pattern if detailed needed
-      "before:content-[''] before:absolute before:inset-0 before:opacity-[0.03] before:pointer-events-none",
-      "before:bg-[url('https://www.transparenttextures.com/patterns/cream-paper.png')]"
+      "flex-1 bg-page relative overflow-hidden flex flex-col items-center justify-center p-6",
     )}>
-      <div className="flex-1 w-full h-full relative overflow-y-auto">
+      <div className="w-full max-w-5xl h-full flex flex-col justify-center">
         {status === 'idle' && <EmptyState />}
         {status === 'processing' && <ProgressStage />}
         {status === 'success' && <ResultViewer />}
         {status === 'error' && (
-           <div className="flex items-center justify-center h-full text-red-500">
+           <div className="flex items-center justify-center h-full text-red-500 font-medium bg-red-50/50 rounded-2xl border border-red-100 p-8">
              Something went wrong. Please try again.
            </div>
         )}

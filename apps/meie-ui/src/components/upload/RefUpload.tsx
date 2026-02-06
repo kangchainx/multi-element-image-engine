@@ -72,8 +72,8 @@ export const RefUpload: React.FC = () => {
 
   return (
     <div className="w-full space-y-3">
-      <div className="flex items-center justify-between">
-        <h3 className="text-sm font-bold text-charcoal uppercase tracking-wider opacity-80 pl-1">
+      <div className="flex items-center justify-between px-1">
+        <h3 className="text-xs font-semibold text-text-secondary uppercase tracking-wider">
           Reference (Structure)
         </h3>
         {referenceImage && (
@@ -81,7 +81,7 @@ export const RefUpload: React.FC = () => {
             variant="ghost" 
             size="sm" 
             onClick={handleRemove}
-            className="h-6 w-6 p-0 text-red-500 hover:text-red-700 hover:bg-red-50"
+            className="h-6 w-6 p-0 text-text-secondary hover:text-red-500 hover:bg-red-50"
           >
             <X size={14} weight="bold" />
           </Button>
@@ -97,18 +97,18 @@ export const RefUpload: React.FC = () => {
       />
 
       {referenceImage ? (
-        <Card className="relative aspect-[4/3] group cursor-pointer border-terracotta/20 border-2">
+        <Card className="relative aspect-[4/3] group cursor-pointer border-accent/20 border-2 shadow-sm">
           <img 
             src={previewUrl} 
             alt="Reference" 
             className="w-full h-full object-cover" 
           />
-          <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
-             <Button variant="secondary" size="sm" onClick={() => fileInputRef.current?.click()}>
+          <div className="absolute inset-0 bg-black/20 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center backdrop-blur-[2px]">
+             <Button variant="secondary" size="sm" onClick={() => fileInputRef.current?.click()} className="shadow-lg">
                 Change
              </Button>
           </div>
-          <div className="absolute top-2 left-2 bg-terracotta/90 text-white text-[10px] px-2 py-0.5 rounded-full font-bold shadow-sm backdrop-blur-sm">
+          <div className="absolute top-2 left-2 bg-white/90 text-text-primary text-[10px] px-2 py-0.5 rounded-md font-medium shadow-sm backdrop-blur-md">
             STRUCTURE
           </div>
         </Card>
@@ -116,22 +116,22 @@ export const RefUpload: React.FC = () => {
         <div
           onClick={() => fileInputRef.current?.click()}
           onDragEnter={handleDragEnter}
-          onDragOver={handleDragEnter} // DragOver 必须阻止默认行为
+          onDragOver={handleDragEnter} 
           onDragLeave={handleDragLeave}
           onDrop={handleDrop}
           className={`
             relative aspect-[4/3] border-[1.5px] border-dashed rounded-xl flex flex-col items-center justify-center
-            transition-all duration-300 cursor-pointer group bg-white/50
+            transition-all duration-300 cursor-pointer group bg-white/40
             ${isDragOver 
-              ? 'border-terracotta bg-terracotta/5 scale-[1.02]' 
-              : 'border-black/10 hover:border-terracotta/50 hover:bg-white'}
+              ? 'border-accent bg-accent/5 scale-[1.01]' 
+              : 'border-border-strong hover:border-accent/50 hover:bg-white'}
           `}
         >
-          <div className={`p-4 rounded-full bg-cream mb-3 transition-transform duration-300 ${isDragOver ? 'scale-110' : 'group-hover:scale-110'}`}>
-            <ImageIcon size={28} className="text-terracotta/80" weight="duotone" />
+          <div className={`p-3 rounded-full bg-sidebar mb-2 transition-transform duration-300 shadow-sm ${isDragOver ? 'scale-110' : 'group-hover:scale-110'}`}>
+            <ImageIcon size={24} className="text-text-secondary" weight="duotone" />
           </div>
-          <span className="text-sm font-medium text-charcoal/80">Upload Reference</span>
-          <span className="text-xs text-charcoal/40 mt-1">Drag & drop or Click</span>
+          <span className="text-sm font-medium text-text-primary">Upload Reference</span>
+          <span className="text-xs text-text-secondary mt-1">Drag & drop or Click</span>
         </div>
       )}
     </div>

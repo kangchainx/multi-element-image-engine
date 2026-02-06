@@ -15,7 +15,6 @@ export const SourceGrid: React.FC = () => {
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files.length > 0) {
       addSourceImages(Array.from(e.target.files));
-      // 重置input，允许重复选择相同文件
       e.target.value = '';
     }
   };
@@ -53,21 +52,10 @@ export const SourceGrid: React.FC = () => {
 
   return (
     <div className="w-full space-y-3 flex-1 overflow-hidden flex flex-col">
-      <div className="flex items-center justify-between">
-        <h3 className="text-sm font-bold text-charcoal uppercase tracking-wider opacity-80 pl-1">
-          Source Images <span className="text-terracotta ml-1">{sourceImages.length}</span>
+      <div className="flex items-center justify-between px-1">
+        <h3 className="text-xs font-semibold text-text-secondary uppercase tracking-wider">
+          Source Images <span className="text-accent ml-0.5">{sourceImages.length}</span>
         </h3>
-        
-        {sourceImages.length > 0 && (
-          <Button 
-            variant="ghost" 
-            size="sm" 
-            onClick={() => useEngineStore.getState().addSourceImages([])} // 这里可以加一个清空所有的方法，但 store 没定义，先不加
-            className="text-xs text-charcoal/50 hover:text-red-500 hidden"
-          >
-            Clear All
-          </Button>
-        )}
       </div>
 
       <input
@@ -79,7 +67,7 @@ export const SourceGrid: React.FC = () => {
         accept="image/*"
       />
 
-      <div className="flex-1 overflow-y-auto pr-2 -mr-2 space-y-3 pb-4 custom-scrollbar">
+      <div className="flex-1 overflow-y-auto pr-1 -mr-2 space-y-3 pb-4 custom-scrollbar">
         {/* Empty Upload Zone / Add Button */}
         <div
           onClick={() => fileInputRef.current?.click()}
@@ -89,17 +77,17 @@ export const SourceGrid: React.FC = () => {
           onDrop={handleDrop}
           className={`
             relative w-full border-[1.5px] border-dashed rounded-xl flex flex-col items-center justify-center
-            transition-all duration-300 cursor-pointer group bg-white/50 min-h-[120px]
+            transition-all duration-300 cursor-pointer group bg-white/40 min-h-[100px]
             ${isDragOver 
-              ? 'border-terracotta bg-terracotta/5' 
-              : 'border-black/10 hover:border-terracotta/50 hover:bg-white'}
+              ? 'border-accent bg-accent/5' 
+              : 'border-border-strong hover:border-accent/50 hover:bg-white'}
           `}
         >
           <div className="flex items-center gap-2">
-            <div className={`p-2 rounded-full bg-cream transition-colors duration-200 ${isDragOver ? 'bg-terracotta/20' : 'group-hover:bg-terracotta/10'}`}>
-               <Plus size={20} className="text-terracotta" weight="bold" />
+            <div className={`p-1.5 rounded-full bg-sidebar transition-colors duration-200 ${isDragOver ? 'bg-accent/20' : 'group-hover:bg-accent/10'}`}>
+               <Plus size={16} className="text-accent" weight="bold" />
             </div>
-            <span className="text-sm font-medium text-charcoal/80">Add Sources</span>
+            <span className="text-sm font-medium text-text-primary">Add Sources</span>
           </div>
         </div>
 
@@ -119,7 +107,6 @@ export const SourceGrid: React.FC = () => {
   );
 };
 
-// Sub-component specifically for items to avoid large file size
 interface SourceImageCardProps {
   file: File;
   index: number;
@@ -129,14 +116,13 @@ interface SourceImageCardProps {
 const SourceImageCard: React.FC<SourceImageCardProps> = ({ file, index, onRemove }) => {
   const url = React.useMemo(() => URL.createObjectURL(file), [file]);
 
-  // Clean up object URL on unmount
   React.useEffect(() => {
     return () => URL.revokeObjectURL(url);
   }, [url]);
 
   return (
-    <Card className="relative aspect-square group animate-fade-in">
-       <div className="absolute top-1 left-1 bg-black/50 text-white text-[9px] px-1.5 py-0.5 rounded font-mono backdrop-blur-sm z-10">
+    <Card className="relative aspect-square group animate-fade-in shadow-sm border border-border-subtle hover:shadow-md">
+       <div className="absolute top-1 left-1 bg-white/90 text-text-primary text-[9px] px-1.5 py-0.5 rounded font-medium backdrop-blur-md z-10 shadow-sm">
           #{index + 1}
        </div>
        <Button 
@@ -146,7 +132,7 @@ const SourceImageCard: React.FC<SourceImageCardProps> = ({ file, index, onRemove
             e.stopPropagation();
             onRemove();
           }}
-          className="absolute top-1 right-1 w-5 h-5 min-w-0 p-0 rounded-full bg-white/90 text-charcoal hover:bg-red-500 hover:text-white opacity-0 group-hover:opacity-100 transition-all shadow-sm z-10"
+          className="absolute top-1 right-1 w-5 h-5 min-w-0 p-0 rounded-full bg-white/90 text-text-primary hover:bg-red-500 hover:text-white opacity-0 group-hover:opacity-100 transition-all shadow-sm z-10"
        >
          <X size={12} weight="bold" />
        </Button>
