@@ -1,0 +1,287 @@
+{
+  "1": {
+    "inputs": {
+      "ckpt_name": "sd_xl_base_1.0.safetensors"
+    },
+    "class_type": "CheckpointLoaderSimple",
+    "pos": [
+      0,
+      300
+    ],
+    "_meta": {
+      "title": "Checkpoint Loader (SDXL)"
+    }
+  },
+  "2": {
+    "inputs": {
+      "text": "MEIE Studio v0.1, Dual-Track Injection, high quality, detailed",
+      "clip": [
+        "1",
+        1
+      ]
+    },
+    "class_type": "CLIPTextEncode",
+    "pos": [
+      260,
+      260
+    ],
+    "_meta": {
+      "title": "POS_PROMPT"
+    }
+  },
+  "3": {
+    "inputs": {
+      "text": "text, watermark, logo, lowres, blurry, artifacts",
+      "clip": [
+        "1",
+        1
+      ]
+    },
+    "class_type": "CLIPTextEncode",
+    "pos": [
+      260,
+      340
+    ],
+    "_meta": {
+      "title": "NEG_PROMPT"
+    }
+  },
+  "4": {
+    "inputs": {
+      "width": 768,
+      "height": 1376,
+      "batch_size": 1
+    },
+    "class_type": "EmptyLatentImage",
+    "pos": [
+      520,
+      300
+    ],
+    "_meta": {
+      "title": "Empty Latent (768x1376)"
+    }
+  },
+  "5": {
+    "inputs": {
+      "seed": 0,
+      "steps": 30,
+      "cfg": 6.5,
+      "sampler_name": "euler",
+      "scheduler": "normal",
+      "denoise": 1,
+      "model": [
+        "23",
+        0
+      ],
+      "positive": [
+        "13",
+        0
+      ],
+      "negative": [
+        "13",
+        1
+      ],
+      "latent_image": [
+        "4",
+        0
+      ]
+    },
+    "class_type": "KSampler",
+    "pos": [
+      1040,
+      300
+    ],
+    "_meta": {
+      "title": "KSampler"
+    }
+  },
+  "6": {
+    "inputs": {
+      "samples": [
+        "5",
+        0
+      ],
+      "vae": [
+        "1",
+        2
+      ]
+    },
+    "class_type": "VAEDecode",
+    "pos": [
+      1300,
+      300
+    ],
+    "_meta": {
+      "title": "VAE Decode"
+    }
+  },
+  "7": {
+    "inputs": {
+      "filename_prefix": "MEIE_DualTrackInjection",
+      "images": [
+        "6",
+        0
+      ]
+    },
+    "class_type": "SaveImage",
+    "pos": [
+      1560,
+      300
+    ],
+    "_meta": {
+      "title": "SaveImage"
+    }
+  },
+  "10": {
+    "inputs": {
+      "image": "REF_COMPOSITION.png"
+    },
+    "class_type": "LoadImage",
+    "pos": [
+      0,
+      100
+    ],
+    "_meta": {
+      "title": "REF_COMPOSITION"
+    }
+  },
+  "11": {
+    "inputs": {
+      "image": [
+        "10",
+        0
+      ],
+      "low_threshold": 0.4,
+      "high_threshold": 0.8
+    },
+    "class_type": "Canny",
+    "pos": [
+      260,
+      100
+    ],
+    "_meta": {
+      "title": "Canny Preprocessor"
+    }
+  },
+  "12": {
+    "inputs": {
+      "control_net_name": "controlnet-canny-sdxl-1.0.safetensors"
+    },
+    "class_type": "ControlNetLoader",
+    "pos": [
+      520,
+      100
+    ],
+    "_meta": {
+      "title": "ControlNet Loader (Canny/Depth)"
+    }
+  },
+  "13": {
+    "inputs": {
+      "positive": [
+        "2",
+        0
+      ],
+      "negative": [
+        "3",
+        0
+      ],
+      "control_net": [
+        "12",
+        0
+      ],
+      "image": [
+        "11",
+        0
+      ],
+      "vae": [
+        "1",
+        2
+      ],
+      "strength": 1,
+      "start_percent": 0,
+      "end_percent": 1
+    },
+    "class_type": "ControlNetApplyAdvanced",
+    "pos": [
+      780,
+      100
+    ],
+    "_meta": {
+      "title": "ControlNetApply (Track A)"
+    }
+  },
+  "20": {
+    "inputs": {
+      "image": "SRC_FEATURE_STYLE.png"
+    },
+    "class_type": "LoadImage",
+    "pos": [
+      0,
+      500
+    ],
+    "_meta": {
+      "title": "SRC_FEATURE_STYLE"
+    }
+  },
+  "21": {
+    "inputs": {
+      "clip_name": "CLIP-ViT-H-14-laion2B-s32B-b79K.safetensors"
+    },
+    "class_type": "CLIPVisionLoader",
+    "pos": [
+      260,
+      500
+    ],
+    "_meta": {
+      "title": "CLIPVisionLoader"
+    }
+  },
+  "22": {
+    "inputs": {
+      "ipadapter_file": "ip-adapter-plus_sdxl_vit-h.safetensors"
+    },
+    "class_type": "IPAdapterModelLoader",
+    "pos": [
+      520,
+      500
+    ],
+    "_meta": {
+      "title": "IPAdapterModelLoader"
+    }
+  },
+  "23": {
+    "inputs": {
+      "model": [
+        "1",
+        0
+      ],
+      "ipadapter": [
+        "22",
+        0
+      ],
+      "image": [
+        "20",
+        0
+      ],
+      "weight": 0.8,
+      "weight_type": "style transfer",
+      "combine_embeds": "concat",
+      "start_at": 0,
+      "end_at": 1,
+      "embeds_scaling": "V only",
+      "clip_vision": [
+        "21",
+        0
+      ]
+    },
+    "class_type": "IPAdapterAdvanced",
+    "pos": [
+      780,
+      500
+    ],
+    "_meta": {
+      "title": "IPAdapterAdvanced (Track B)"
+    }
+  }
+}

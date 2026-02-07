@@ -3,12 +3,14 @@
   "version": "1.0.0",
   "type": "module",
   "description": "Multi-Element Image Engine - Backend server for ComfyUI API integration",
-  "main": "demo.ts",
+  "main": "dist/api/server.js",
   "scripts": {
-    "start": "tsx demo.ts",
-    "check": "tsx check-models.ts",
+    "start": "tsx src/api/server.ts",
+    "api": "tsx src/api/server.ts",
+    "worker": "tsx src/worker/worker.ts",
+    "dual-track": "tsx src/bin/dual-track.ts",
     "build": "tsc",
-    "dev": "tsx watch demo.ts",
+    "dev": "tsx watch src/api/server.ts",
     "type-check": "tsc --noEmit"
   },
   "engines": {

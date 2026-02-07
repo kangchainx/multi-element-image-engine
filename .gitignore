@@ -12,6 +12,7 @@ build/
 *.js.map
 *.d.ts
 *.d.ts.map
+!apps/meie-server/src/types/node-sqlite.d.ts
 !package.json
 !*.config.js
 !vite.config.ts
@@ -47,6 +48,10 @@ coverage/
 # Temporary files
 tmp/
 temp/
+
+# Local databases
+*.sqlite
+*.sqlite-journal
 
 # Claude Code configuration
 .claude/
