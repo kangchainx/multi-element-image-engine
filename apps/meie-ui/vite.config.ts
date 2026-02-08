@@ -8,7 +8,9 @@ export default defineConfig({
     port: 5173,
     proxy: {
       '/api': {
-        target: 'http://127.0.0.1:8000',
+        // Proxy MEIE API in dev to avoid CORS and keep relative URLs working (SSE, images, etc).
+        // UI calls: /api/v1/...  ->  API listens: http://127.0.0.1:8090/v1/...
+        target: 'http://127.0.0.1:8090',
         changeOrigin: true,
         rewrite: (path) => path.replace(/^\/api/, '')
       }

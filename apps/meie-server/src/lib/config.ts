@@ -80,7 +80,11 @@ export function loadConfig(): MeieConfig {
   const outputDirPrefix = (process.env.OUTPUT_DIR_PREFIX || 'MEIE_RUNS').trim();
 
   const redisUrl = (process.env.REDIS_URL || 'redis://127.0.0.1:6379').trim();
-  const queueName = (process.env.QUEUE_NAME || 'meie:jobs').trim();
+  // BullMQ queue names cannot contain ":".
+  const queueName = (process.env.QUEUE_NAME || 'meie_jobs').trim();
+  if (queueName.includes(':')) {
+    throw new Error(`Invalid QUEUE_NAME="${queueName}". BullMQ queue names cannot contain ":". Use e.g. "meie_jobs".`);
+  }
   const jobsPerDevice = toInt(process.env.JOBS_PER_DEVICE, 1);
   const workerMaxProcesses = toInt(process.env.WORKER_MAX_PROCESSES, 8);
   const workerTotalConcurrency = toMaybeInt(process.env.WORKER_TOTAL_CONCURRENCY);
@@ -88,7 +92,7 @@ export function loadConfig(): MeieConfig {
   const workerConcurrencyPerProcess = toInt(process.env.WORKER_CONCURRENCY_PER_PROCESS, 1);
 
   const host = (process.env.HOST || '127.0.0.1').trim();
-  const port = toInt(process.env.PORT, 8787);
+  const port = toInt(process.env.PORT, 8090);
 
   const maxUploadBytes = toInt(process.env.MAX_UPLOAD_BYTES, 50 * 1024 * 1024);
   const maxFiles = toInt(process.env.MAX_FILES, 10);

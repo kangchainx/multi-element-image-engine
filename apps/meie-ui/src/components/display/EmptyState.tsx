@@ -7,11 +7,9 @@ export const EmptyState: React.FC = () => {
       <div className="w-20 h-20 rounded-2xl bg-sidebar flex items-center justify-center mb-6 shadow-sm border border-border-subtle">
         <Aperture size={40} weight="light" className="text-text-secondary" />
       </div>
-      <h3 className="font-display text-xl font-medium text-text-primary mb-2">
-        Ready to Create
-      </h3>
+      <h3 className="font-display text-xl font-medium text-text-primary mb-2">等待创建任务</h3>
       <p className="max-w-xs leading-relaxed text-text-secondary text-sm">
-        Upload a <span className="text-text-primary font-medium">Structure Reference</span> and select your <span className="text-text-primary font-medium">Source Elements</span> to begin.
+        左侧上传参考图与素材图后，点击“创建任务”加入队列。运行中的任务与历史记录请在右侧查看。
       </p>
     </div>
   );

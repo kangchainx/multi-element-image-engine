@@ -10,6 +10,7 @@ export type ImageOutput = { filename: string; subfolder: string; type: string };
 export type NodeOutput = { images?: ImageOutput[] };
 export type HistoryData = { outputs: Record<string, NodeOutput>; status?: { completed?: boolean; messages?: any[] } };
 export type SystemStats = { devices?: any[] };
+export type ObjectInfo = Record<string, any>;
 
 function toWsBase(httpBase: string): string {
   const u = new URL(httpBase);
@@ -62,6 +63,30 @@ export async function getSystemStats(comfyuiApiBase: string, timeoutMs = 5000): 
   } finally {
     clearTimeout(t);
   }
+}
+
+export async function getObjectInfo(comfyuiApiBase: string, timeoutMs = 5000): Promise<ObjectInfo | null> {
+  const ac = new AbortController();
+  const t = setTimeout(() => ac.abort(), timeoutMs);
+  try {
+    const r = await fetch(`${comfyuiApiBase}/object_info`, { signal: ac.signal });
+    if (!r.ok) return null;
+    const json = (await r.json()) as any;
+    return json && typeof json === 'object' ? (json as ObjectInfo) : null;
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(t);
+  }
+}
+
+export function listWorkflowNodeTypes(workflow: Workflow): string[] {
+  const set = new Set<string>();
+  for (const n of Object.values(workflow || {})) {
+    const t = (n as any)?.class_type;
+    if (typeof t === 'string' && t.trim()) set.add(t.trim());
+  }
+  return Array.from(set).sort();
 }
 
 export async function getComfyDeviceCount(comfyuiApiBase: string, timeoutMs = 5000): Promise<number> {

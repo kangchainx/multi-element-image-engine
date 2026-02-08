@@ -1,149 +1,89 @@
-# ComfyUI API Demo
+# @meie/server
 
-用TypeScript代码自动调用ComfyUI生成图片的演示项目 🎨
+MEIE（Multi-Element Image Engine）的后端服务。
 
-## 🎯 这是什么？
+它对外提供异步 Job API，并通过 Worker 进程调用 ComfyUI 出图。
 
-这是一个**面试级别的TypeScript项目**，展示如何通过API调用ComfyUI来自动化图片生成。
+## 架构说明
 
-**通常方式**: 打开ComfyUI界面 → 手动点击 → 生成图片
-**这个项目**: 运行代码 → 自动提交 → 批量生成
+- 队列：BullMQ + Redis
+- 持久化：SQLite（job 元数据/文件索引/结果；不承担排队）
+- 进度：API 订阅 BullMQ QueueEvents，通过 SSE 推送到客户端
+- 同用户并发限制：Redis Lua，按 `X-User-Id`（默认最多 3 个未完成任务）
+- Worker：`cluster` master fork 多进程；并发根据 CPU 和 ComfyUI `/system_stats` 推导
 
-## 📋 前置条件
+## 运行依赖
 
-- ✅ Node.js 18+
-- ✅ ComfyUI运行中（你的端口：8000）
-- ❗ **需要安装模型** - 请先查看下面的快速开始
+- Node.js >= 18
+- Redis 已启动（默认 `127.0.0.1:6379`）
+- ComfyUI 已启动（默认 `http://127.0.0.1:8000`）
 
-## 🚀 快速开始
+## 配置（.env）
 
-### 1. 安装依赖
+把 `.env` 放在仓库根目录（不要放在本目录）。所有脚本都通过 Node 原生参数 `--env-file-if-exists=../../.env` 自动读取。
+
+常用变量：
+
+```env
+COMFYUI_API_BASE=http://127.0.0.1:8000
+REDIS_URL=redis://127.0.0.1:6379
+
+# BullMQ queue name 不能包含 ":"（请用下划线）
+QUEUE_NAME=meie_jobs
+
+# ComfyUI input 目录的绝对路径
+COMFY_INPUT_DIR=D:/develop/ComfyUI_Files/input
+
+# 需要让局域网其它电脑访问 API 时，设置为 0.0.0.0
+HOST=0.0.0.0
+PORT=8090
+```
+
+更多变量见 `../../.env.example`。
+
+## 安装依赖
+
+在仓库根目录执行：
 
 ```bash
 npm install
 ```
 
-### 2. 检查模型状态（重要！）
+## 启动（开发模式）
+
+启动 API（自动编译并在变更后重启）：
 
 ```bash
-npm run check
+npm run dev --workspace=@meie/server
 ```
 
-如果显示"未找到任何模型"，你需要：
-1. 下载Stable Diffusion模型
-2. 放到 `/Users/chris/Documents/ComfyUI/models/checkpoints/`
-3. 详细步骤见 → **[模型安装指南.md](./模型安装指南.md)**
-
-### 3. 运行demo生成图片
+启动 Worker（第二个终端）：
 
 ```bash
-npm start
+npm run dev:worker --workspace=@meie/server
 ```
 
-图片将保存到 `/Users/chris/Documents/ComfyUI/output/`
+## 启动（类生产）
 
-## 📚 文档导航
+API：
 
-- **[快速开始.md](./快速开始.md)** ⭐ 完整的3步入门指南
-- **[使用指南.md](./使用指南.md)** 📖 详细的使用说明和流程图
-- **[模型安装指南.md](./模型安装指南.md)** 💾 如何下载和安装模型
-
-## 🛠️ 可用命令
-
-| 命令 | 说明 |
-|------|------|
-| `npm start` | 运行demo，生成图片 |
-| `npm run check` | 检查ComfyUI中有哪些可用模型 |
-| `npm run dev` | 开发模式（文件改动自动重启） |
-| `npm run build` | 编译TypeScript到JavaScript |
-
-## 🔄 工作流程
-
-```
-1. 你在ComfyUI设计workflow → 导出JSON
-         ↓
-2. demo.ts读取JSON → 调用API提交
-         ↓
-3. ComfyUI服务器执行 → 生成图片
-         ↓
-4. 程序显示结果 → 你查看output目录
+```bash
+npm run api --workspace=@meie/server
 ```
 
-## 💡 使用场景
+Worker：
 
-- ✅ 批量生成图片（修改代码循环提交）
-- ✅ 自动化工作流（集成到你的应用）
-- ✅ API后端服务（接收请求生成图片）
-- ✅ 技术面试展示（TypeScript + API集成）
-
-## 🏗️ 项目结构
-
-```
-comfy-test/
-├── demo.ts                # 主程序（生成图片）
-├── check-models.ts        # 模型检查工具
-├── Unsaved Workflow.json  # workflow配置
-├── tsconfig.json          # TypeScript配置
-├── package.json           # 项目配置
-├── 快速开始.md            # 3步入门
-├── 使用指南.md            # 详细说明
-└── 模型安装指南.md        # 模型安装
+```bash
+npm run worker --workspace=@meie/server
 ```
 
-## ✨ 技术特性
+## API 接口速查
 
-- 🔷 **TypeScript** - 完整类型定义，strict模式
-- 🌐 **原生fetch API** - 零运行时依赖
-- ⚡ **Async/await** - 现代异步模式
-- 🛡️ **完善的错误处理** - 网络、文件、API错误
-- 🔄 **轮询机制** - 等待异步任务完成
-- 📦 **ES Modules** - 现代模块系统
+Base URL: `http://<HOST>:<PORT>`（默认 `127.0.0.1:8090`）
 
-## 🧪 示例输出
-
-```
-=== ComfyUI API Demo ===
-Client ID: 8131d7b2-9373-482f-83dc-4622a1bbdb4d
-
-[1/4] Loading workflow...
-Model: stable-diffusion-v1-5.safetensors
-Prompt: beautiful scenery nature glass bottle landscape...
-Size: 512x512
-
-[2/4] Submitting workflow to ComfyUI...
-✓ Workflow submitted successfully
-
-[3/4] Waiting for execution to complete...
-✓ Execution finished
-
-[4/4] Processing results...
-=== Generated Images ===
-Image 1:
-  Filename: ComfyUI_00001_.png
-
-=== Demo Complete ===
-```
-
-## ❓ 常见问题
-
-**Q: 为什么运行npm start出错？**
-A: 先运行 `npm run check` 确认有可用模型
-
-**Q: 如何修改提示词？**
-A: 编辑 `Unsaved Workflow.json` 中的 `text` 字段
-
-**Q: 如何批量生成？**
-A: 修改 `demo.ts` 添加循环，详见使用指南
-
-**Q: 支持其他模型吗？**
-A: 支持！安装后用 `npm run check` 查看
-
-## 🔗 相关链接
-
-- [ComfyUI官网](https://www.comfy.org/)
-- [ComfyUI GitHub](https://github.com/comfyanonymous/ComfyUI)
-- [Stable Diffusion模型](https://huggingface.co/models)
-
----
-
-**现在开始** → 运行 `npm run check` 检查模型状态 🚀
+- `GET /healthz`
+- `POST /v1/jobs`（multipart；必需 Header `X-User-Id`）
+- `GET /v1/jobs/:jobId`
+- `GET /v1/jobs/:jobId/events`（SSE：`snapshot`、`state`、`progress`、`completed`、`failed`）
+- `GET /v1/jobs/:jobId/images/:idx`
+- `POST /v1/jobs/:jobId/cancel`

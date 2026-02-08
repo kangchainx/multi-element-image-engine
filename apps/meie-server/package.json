@@ -5,12 +5,15 @@
   "description": "Multi-Element Image Engine - Backend server for ComfyUI API integration",
   "main": "dist/api/server.js",
   "scripts": {
-    "start": "tsx src/api/server.ts",
-    "api": "tsx src/api/server.ts",
-    "worker": "tsx src/worker/index.ts",
-    "dual-track": "tsx src/bin/dual-track.ts",
+    "start": "npm run build && node --env-file-if-exists=../../.env dist/api/server.js",
+    "api": "npm run build && node --env-file-if-exists=../../.env dist/api/server.js",
+    "worker": "npm run build && node --env-file-if-exists=../../.env dist/worker/index.js",
+    "dual-track": "npm run build && node --env-file-if-exists=../../.env dist/bin/dual-track.js",
     "build": "tsc",
-    "dev": "tsx watch src/api/server.ts",
+    "dev:build": "tsc --watch --preserveWatchOutput",
+    "dev:api": "node --env-file-if-exists=../../.env dist/api/server.js",
+    "dev:worker": "node --env-file-if-exists=../../.env dist/worker/index.js",
+    "dev": "node scripts/dev-api.mjs",
     "type-check": "tsc --noEmit"
   },
   "engines": {

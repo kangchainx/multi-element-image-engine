@@ -215,13 +215,16 @@ export function buildDualTrackWorkflow(opts: {
         _meta: { title: `SRC_${i}` },
       };
 
-      const ipaId = nextNumericNodeId(workflow);
       const w = Array.isArray(opts.params.ipadapter_weights) ? opts.params.ipadapter_weights[i] : undefined;
       const wt = Array.isArray(opts.params.ipadapter_weight_types) ? opts.params.ipadapter_weight_types[i] : undefined;
       const s = Array.isArray(opts.params.ipadapter_starts) ? opts.params.ipadapter_starts[i] : undefined;
       const e = Array.isArray(opts.params.ipadapter_ends) ? opts.params.ipadapter_ends[i] : undefined;
 
+      // IMPORTANT: ensurePrep() may allocate a new node id via nextNumericNodeId().
+      // So we must call it BEFORE allocating ipaId, otherwise the prep node may take the same id
+      // and get overwritten, causing self-referential links like image=[ipaId,0].
       const imageRef = cropPos ? ensurePrep([loadId, 0], `Prep SRC_${i} for ClipVision`) : ([loadId, 0] as [string, number]);
+      const ipaId = nextNumericNodeId(workflow);
 
       workflow[ipaId] = {
         class_type: 'IPAdapterAdvanced',
