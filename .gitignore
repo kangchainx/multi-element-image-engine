@@ -42,6 +42,9 @@ yarn-debug.log*
 yarn-error.log*
 pnpm-debug.log*
 
+# Local npm cache (workaround for machines where default cache path is not writable)
+.npm-cache/
+
 # Testing
 coverage/
 
@@ -52,6 +55,8 @@ temp/
 # Local databases
 *.sqlite
 *.sqlite-journal
+*.sqlite-wal
+*.sqlite-shm
 
 # Claude Code configuration
 .claude/
