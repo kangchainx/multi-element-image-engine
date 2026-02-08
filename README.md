@@ -1,141 +1,237 @@
-# Multi-Element Image Engine
+# Multi-Element Image Engine (MEIE)
 
-这是一个集成了 **ComfyUI API 后端** 与 **React 前端** 的 Monorepo 项目，旨在构建高级的 AI 图像生成工作流。
+MEIE 是一个把 **多张输入图片**（1 张参考图 `REF` + N 张素材图 `SRC`）组织成 **ComfyUI workflow** 并以 **Job 队列**方式运行的示例工程。
 
-## 📁 项目结构
+## 架构图（简化示意）
 
+```text
+             (HTTP: 上传/创建任务/查状态/SSE/取结果)
++-------------------+        +-------------------------+
+|  meie-ui (Vite)   | <----> |  meie-server API (8090) |
++-------------------+        +-------------------------+
+                                  |            ^
+                                  |            |
+                                  | SSE events |
+                                  v            |
+                           +-------------------------+
+                           |  Redis + BullMQ Queue   |
+                           +-------------------------+
+                                  ^            |
+                                  | consume    | enqueue(jobId)
+                                  |            v
+                        +-------------------------------+
+                        |  meie-server Worker (BullMQ)  |
+                        +-------------------------------+
+                                  |  POST /prompt + WS /ws
+                                  v
+                           +------------------+
+                           |   ComfyUI (8000) |
+                           +------------------+
+                            ^              |
+                            | reads input  | writes output
+                            |              v
+   COMFY_INPUT_DIR/UPLOAD_SUBDIR/<jobId>/...      (ComfyUI output dir)
+
+                        +------------------+
+                        | SQLite (meie.db) |
+                        +------------------+
+                      (job/事件/结果元数据持久化)
 ```
-multi-element-image-engine/
-├── apps/
-│   ├── meie-server/          # 后端 - ComfyUI API 集成与测试工具
-│   └── meie-ui/              # 前端 - React + Vite + TailwindCSS
-├── package.json              # 根工作区配置
-└── tsconfig.json             # 共享 TypeScript 配置
-```
 
-## 🚀 快速开始
+## 目录结构
 
-### 1. 环境准备
+- `apps/meie-ui`: React + Vite 前端
+- `apps/meie-server`: Node.js 后端（API + Worker + SQLite + BullMQ）
+- `workflow_api.json`: ComfyUI workflow（后端会在运行时把输入文件名等字段写进去）
 
-- Node.js >= 18.0.0
-- npm >= 7.0.0
-- **ComfyUI** 正在本地运行 (默认端口 8000)
+## 架构概览
 
-### 2. ComfyUI 模型配置（重要）
+1. UI（`meie-ui`）调用 API（`meie-server`）上传 `ref` 和 `sources[]`
+2. API 把上传的图片写入 **ComfyUI input 目录**下的 `UPLOAD_SUBDIR/<jobId>/...`
+3. API 将 jobId 入队（BullMQ/Redis）
+4. Worker 取队列任务，构建/校验 workflow，调用 ComfyUI：
+   - `POST /prompt` 提交任务
+   - `WS /ws` 或轮询 history 读取进度与输出
+5. Worker 保存输出元数据到 SQLite
+6. UI 通过 SSE（`/v1/jobs/:jobId/events`）更新进度，完成后展示输出图
 
-你需要先确保 ComfyUI 中安装了基础模型（Checkpoint）才能生成图片。
+注意：如果你的机器只有 **1 张 GPU**，ComfyUI 的 `devices=1` 属正常现象。多 Worker 只会增加“提交并发”，但 ComfyUI 仍可能在 GPU 上串行执行（队列排队）。
 
-**如何安装模型：**
+## 运行依赖
 
-1.  **使用 ComfyUI Manager (推荐)**:
-    - 打开 http://127.0.0.1:8000
-    - 点击 "Manager" -> "Model Manager"
-    - 搜索并安装 "Stable Diffusion v1.5"
+你需要准备以下组件：
 
-2.  **手动安装**:
-    - 下载模型文件（如 `.safetensors`）
-    - 放入 ComfyUI 的模型目录：`/Users/chris/Documents/ComfyUI/models/checkpoints/`
-    - [Stable Diffusion v1.5 下载链接](https://huggingface.co/runwayml/stable-diffusion-v1-5)
+### 1) Node.js + npm
 
-**验证模型安装：**
+- 推荐：Node.js 20+（本项目脚本使用了 `node --env-file-if-exists` 读取根目录 `.env`）
+- 也可用 Node 18，但需要你自行在 shell 里导出环境变量（或改脚本用 dotenv）
 
-在项目根目录运行以下命令，检查 ComfyUI 是否识别到了模型：
+### 2) Redis（BullMQ 队列依赖）
+
+推荐用 Docker（最省心）：
 
 ```bash
-cd apps/meie-server
-npm run check
+docker run --name redis-meie -p 6379:6379 -d redis:7
 ```
 
-如果看到 "✓ 找到 X 个可用模型"，说明配置成功。
+如果你不用 Docker：
+- Windows：建议用 WSL2 跑 Redis，或使用兼容产品（如 Memurai）
+- macOS：`brew install redis && brew services start redis`
+- Linux：`apt/yum/pacman` 安装 `redis-server` 并启动
 
-### 3. 安装与运行
+默认连接：`redis://127.0.0.1:6379`
 
-回到项目根目录：
+### 3) ComfyUI（生成引擎）
+
+需要在本机跑一个 ComfyUI 服务（默认端口 `8000`），并确保 workflow 里使用到的自定义节点已安装（例如 IPAdapter 相关节点）。
+
+一个常见的安装方式（示例）：
+1. 安装 Python（建议 3.10/3.11）并创建虚拟环境
+2. 克隆 ComfyUI 仓库并安装依赖
+3. 启动 ComfyUI（示例端口 8000）
+
+你最终需要的是：ComfyUI 能访问自己的 `input/` 目录，并能正常接受 `POST /prompt`。
+
+默认连接：`http://127.0.0.1:8000`
+
+## 环境变量（.env）
+
+本项目后端会在启动时尝试读取仓库根目录的 `.env`（如果存在）。
+
+最小可用示例（Windows 路径建议用正斜杠）：
+
+```env
+COMFYUI_API_BASE=http://127.0.0.1:8000
+REDIS_URL=redis://127.0.0.1:6379
+QUEUE_NAME=meie_jobs
+
+# 关键：指向 ComfyUI 的 input 目录（绝对路径）
+COMFY_INPUT_DIR=D:/develop/ComfyUI_Files/input
+UPLOAD_SUBDIR=meie_uploads
+OUTPUT_DIR_PREFIX=MEIE_RUNS
+
+HOST=0.0.0.0
+PORT=8090
+```
+
+说明：上传的图片会保存到：
+
+`COMFY_INPUT_DIR/UPLOAD_SUBDIR/<jobId>/ref.(png|jpg|webp)`
+
+`COMFY_INPUT_DIR/UPLOAD_SUBDIR/<jobId>/src_0.(png|jpg|webp)`、`src_1...`
+
+更多配置项见 `.env.example`。
+
+## 安装与启动
+
+### 安装依赖
 
 ```bash
-# 1. 安装所有依赖
 npm install
+```
 
-# 2. 启动开发环境（同时启动前端和后端）
+### 启动（推荐：分开 3 个终端）
+
+1. 启动 API（默认 `http://127.0.0.1:8090`）
+```bash
+npm run dev:server
+```
+
+2. 启动 Worker
+```bash
+npm run dev:worker
+```
+
+3. 启动 UI（默认 `http://localhost:5173`）
+```bash
+npm run dev:ui
+```
+
+Windows 提示：
+- 如果你在 PowerShell 里遇到 `npm.ps1` 执行策略问题，可以改用：
+  - `cmd /c npm run dev:ui`（或在 CMD 里运行）
+  - 或 PowerShell 使用 `-NoProfile`
+
+### 一键启动（可选）
+
+```bash
 npm run dev
 ```
 
-- **前端界面**: 打开 [http://localhost:5173](http://localhost:5173)
-- **后端服务**: 运行在监听模式，处理 TypeScript 编译
+## 使用方式（UI）
 
----
+1. 打开 UI：`http://localhost:5173`
+2. 左侧上传：
+   - 参考图（REF）：1 张
+   - 素材图（SRC）：至少 1 张（支持多张）
+3. 点击「创建任务」
+4. 右侧「进行中」Tab 可查看排队/运行中的任务进度
+5. 任务完成后，点击任务可在中间区域查看结果并下载
 
-## 📘 详细使用指南
+限制：
+- 同一用户最多允许 3 个“排队/进行中”的任务（UI 与后端一致）
+- 仅支持 `png/jpg/webp`（后端会按文件魔数校验）
 
-### 后端功能 (@meie/server)
+## 后端 API（简表）
 
-后端模块主要用于测试 ComfyUI API 连接和执行自动化工作流。
+Base URL：`http://127.0.0.1:8090`
 
-**常用命令** (在 `apps/meie-server` 目录下):
+### 健康检查
+- `GET /healthz`
 
-- `npm start`: 运行 Demo，读取 `demo_workflow.json` 并生成一张图片。
-- `npm run check`: 检查可用模型，并自动更新 workflow 文件以使用第一个可用模型。
+### 创建任务
+- `POST /v1/jobs`
+- Header：`X-User-Id: <string>`（用于按用户限流与历史查询）
+- Body：`multipart/form-data`
+  - `ref`: 单文件
+  - `sources`: 多文件（>= 1）
+  - `params`: JSON（可选）
+  - `debug`: `"1"`（可选）
+- 返回：`202 { "jobId": "<uuid>" }`
 
-**工作流原理：**
+### 查询任务
+- `GET /v1/jobs/:jobId`
 
-1.  代码读取 `Unsaved Workflow.json` (ComfyUI API 格式)。
-2.  通过 HTTP 请求将工作流发送给 ComfyUI (`http://127.0.0.1:8000/prompt`)。
-3.  通过 WebSocket 监听生成进度。
-4.  图片生成后保存在 ComfyUI 的 `output` 目录下。
+### 订阅进度（SSE）
+- `GET /v1/jobs/:jobId/events`
+- 事件包括：`snapshot`、`state`、`progress`、`completed`、`failed`
 
-### 前端功能 (@meie/ui)
+### 查询历史列表（新增）
+- `GET /v1/jobs?state=active|done|all&limit=100`
+- Header：`X-User-Id: <string>`
 
-MEIE Studio 是一个现代化的 AI 图像合成工作台。
+### 获取输出图片（后端代理 ComfyUI /view）
+- `GET /v1/jobs/:jobId/images/:idx`
 
-**主要特性：**
-- **拖拽上传**: 支持参考图（Reference）和多张素材图（Source）的拖拽上传。
-- **实时状态**: 完整的生成进度模拟和状态展示。
-- **Modern UI**: 使用 TailwindCSS 构建的 Claude 风格界面，支持深色/浅色主题。
-- **API 代理**: 开发服务器配置了代理，前端请求 `/api/*` 会自动转发到本地 ComfyUI。
+### 取消任务
+- `POST /v1/jobs/:jobId/cancel`
 
----
+## 常见问题排查
 
-## 🔧 架构说明
+### 1) 端口被占用（EADDRINUSE）
 
-### Monorepo (npm workspaces)
-本项目使用 npm workspaces 管理依赖：
-- **依赖提升**: 公共依赖（TypeScript, @types/node）安装在根目录。
-- **统一管理**: 一次 `npm install` 即可安装所有依赖。
+默认端口：
+- API：`8090`
+- UI：`5173`
+- ComfyUI：`8000`
+- Redis：`6379`
 
-### API Proxy
-前端开发服务器 (Vite) 配置了代理：
-- 前端请求: `http://localhost:5173/api/...`
-- 自动转发: `http://127.0.0.1:8000/...`
-- **优势**: 解决了开发环境下的 CORS 跨域问题。
-
----
-
-## ❓ 常见问题 (FAQ)
-
-**Q: 为什么运行 npm start 报错说找不到模型？**
-A: 请参考上文的"模型配置"部分。ComfyUI 需要 Checkpoint 模型才能工作。运行 `npm run check` 可以帮你诊断问题。
-
-**Q: 如何修改生成的图片内容？**
-A:
-1.  **前端**: 在网页界面上传不同的参考图或修改参数。
-2.  **后端**: 修改 `apps/meie-server/demo_workflow.json` 文件中的 prompt 节点文本，或者修改代码中的参数。
-
-**Q: 生成图片需要多久？**
-A: 取决于你的硬件。在 Apple Silicon (M1/M2/M3) Mac 上，使用 MPS 加速通常需要 20-60 秒。
-
-**Q: 手动设计的 ComfyUI 工作流怎么用？**
-A: 在 ComfyUI 网页端点击 "Save (API Format)" 导出 JSON，将其保存为项目中的 `demo_workflow.json` (或代码中指定的文件名) 即可。
-
----
-
-## 🤝 贡献与开发
-
+Windows 查占用：
 ```bash
-# 运行类型检查
-npm run type-check
-
-# 构建生产版本
-npm run build
+netstat -ano | findstr :8090
+taskkill /PID <pid> /T /F
 ```
 
-**License**: MIT
+### 2) ComfyUI /prompt 400：missing_node_type / validation failed
+
+- `missing_node_type`：说明 workflow 用到的自定义节点没装（把 custom_nodes 安装齐）
+- `Invalid image file`：说明 workflow 里 `LoadImage` 指向的文件名在 ComfyUI input 下不存在或不是有效图片
+- 本项目会把上传图写入 `COMFY_INPUT_DIR/UPLOAD_SUBDIR/<jobId>/...`，并强制 workflow 只能读取这些上传文件
+
+### 3) 单 GPU 并发
+
+你只有 1 张 GPU 时，ComfyUI `/system_stats.devices=1` 正常；多开 Worker 通常不会带来“真正同时生成”。
+
+## License
+
+MIT
