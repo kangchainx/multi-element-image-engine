@@ -288,6 +288,28 @@ export function getJob(db: DatabaseSync, jobId: string): JobRow | null {
   return row ? (row as JobRow) : null;
 }
 
+export function listJobsByUser(
+  db: DatabaseSync,
+  userId: string,
+  opts?: {
+    states?: JobState[] | null;
+    limit?: number;
+  },
+): JobRow[] {
+  const states = opts?.states ?? null;
+  const limit = Math.max(1, Math.min(200, Math.trunc(opts?.limit ?? 50)));
+
+  if (!states || states.length === 0) {
+    return (db
+      .prepare(`SELECT * FROM jobs WHERE user_id=? ORDER BY created_at DESC LIMIT ?`)
+      .all(userId, limit) as any[]) as JobRow[];
+  }
+
+  const ph = states.map(() => '?').join(', ');
+  const sql = `SELECT * FROM jobs WHERE user_id=? AND state IN (${ph}) ORDER BY created_at DESC LIMIT ?`;
+  return (db.prepare(sql).all(userId, ...states, limit) as any[]) as JobRow[];
+}
+
 export function getJobResults(db: DatabaseSync, jobId: string): JobResultRow[] {
   return (db.prepare(`SELECT * FROM job_results WHERE job_id=? ORDER BY idx ASC`).all(jobId) as any[]) as JobResultRow[];
 }

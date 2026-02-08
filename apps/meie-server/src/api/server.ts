@@ -10,6 +10,7 @@ import {
   getJob,
   getJobResults,
   insertJobEvent,
+  listJobsByUser,
   markJobCanceled,
   markJobFailed,
   markJobQueued,
@@ -18,7 +19,8 @@ import {
   upsertJobFile,
 } from '../db/db.js';
 import { parseMultipartForm } from '../http/multipart.js';
-import { guessImageExt, safeRelPath, sanitizeHeaderToken, sha256Hex } from '../lib/utils.js';
+import { safeRelPath, sanitizeHeaderToken, sha256Hex, sniffImageExt } from '../lib/utils.js';
+import { jobLog, log } from '../lib/log.js';
 import { createQueue, createQueueEvents } from '../queue/queue.js';
 import { createRedisConnection } from '../queue/redis.js';
 import { acquireUserInflight, releaseUserInflight } from '../queue/user-limit.js';
@@ -96,6 +98,28 @@ function jobPublic(jobId: string): any {
   };
 }
 
+function jobPublicFromRow(job: any): any {
+  const jobId = String(job.job_id);
+  const results = job.state === 'completed' ? getJobResults(db, jobId) : [];
+  const images = results.map((r) => ({
+    idx: r.idx,
+    url: `/v1/jobs/${jobId}/images/${r.idx}`,
+  }));
+  const progress = job.progress_json ? (parseJsonField(job.progress_json) as Json) : null;
+  return {
+    id: jobId,
+    user_id: job.user_id,
+    state: job.state,
+    created_at: job.created_at,
+    started_at: job.started_at,
+    finished_at: job.finished_at,
+    comfy_prompt_id: job.comfy_prompt_id,
+    error: job.error,
+    progress,
+    images,
+  };
+}
+
 function sseWrite(res: ServerResponse, evt: { id?: number; event: string; data: any }): void {
   if (evt.id !== undefined) res.write(`id: ${evt.id}\n`);
   res.write(`event: ${evt.event}\n`);
@@ -115,9 +139,11 @@ async function handleCreateJob(req: IncomingMessage, res: ServerResponse): Promi
   const userId = sanitizeHeaderToken(userIdRaw);
 
   const jobId = randomUUID();
+  jobLog(jobId, 'info', 'create: request received', { userId });
 
   const acquired = await acquireUserInflight(redis, userId, jobId, { limit: 3, ttlSeconds: 86400 });
   if (!acquired.ok) {
+    jobLog(jobId, 'warn', 'create: rejected by inflight limit', { inflight: acquired.inflight, limit: acquired.limit });
     tooMany(res, 'too many concurrent jobs for this user', { inflight: acquired.inflight, limit: acquired.limit });
     return;
   }
@@ -126,6 +152,7 @@ async function handleCreateJob(req: IncomingMessage, res: ServerResponse): Promi
   try {
     parsed = await parseMultipartForm(req, { maxBytes: cfg.maxUploadBytes, maxFiles: cfg.maxFiles });
   } catch (e) {
+    jobLog(jobId, 'warn', 'create: multipart parse failed', { message: e instanceof Error ? e.message : String(e) });
     await releaseUserInflight(redis, userId, jobId);
     badRequest(res, e instanceof Error ? e.message : 'invalid multipart');
     return;
@@ -134,11 +161,13 @@ async function handleCreateJob(req: IncomingMessage, res: ServerResponse): Promi
   const refParts = parsed.files.filter((f) => f.fieldName === 'ref');
   const srcParts = parsed.files.filter((f) => f.fieldName === 'sources');
   if (refParts.length !== 1) {
+    jobLog(jobId, 'warn', 'create: invalid ref parts', { count: refParts.length });
     await releaseUserInflight(redis, userId, jobId);
     badRequest(res, 'expected exactly 1 file field named "ref"');
     return;
   }
   if (srcParts.length < 1) {
+    jobLog(jobId, 'warn', 'create: missing sources', { count: srcParts.length });
     await releaseUserInflight(redis, userId, jobId);
     badRequest(res, 'expected >=1 file field named "sources"');
     return;
@@ -147,11 +176,19 @@ async function handleCreateJob(req: IncomingMessage, res: ServerResponse): Promi
   const paramsRaw = (parsed.fields['params'] || [])[0];
   const params = paramsRaw ? parseJsonField<Record<string, any>>(paramsRaw) : null;
   if (paramsRaw && !params) {
+    jobLog(jobId, 'warn', 'create: invalid params JSON');
     await releaseUserInflight(redis, userId, jobId);
     badRequest(res, 'invalid params JSON');
     return;
   }
   const debug = ((parsed.fields['debug'] || [])[0] || '').trim() === '1';
+  jobLog(jobId, 'info', 'create: parsed multipart', {
+    ref: { name: refParts[0]?.filename, bytes: refParts[0]?.data?.length ?? 0 },
+    sources: srcParts.map((s) => ({ name: s.filename, bytes: s.data?.length ?? 0 })).slice(0, 5),
+    sourcesCount: srcParts.length,
+    debug,
+    hasParams: Boolean(paramsRaw),
+  });
 
   const runDirRel = safeRelPath(cfg.uploadSubdir, jobId);
   const runDirAbs = path.join(cfg.comfyInputDir, runDirRel);
@@ -167,9 +204,16 @@ async function handleCreateJob(req: IncomingMessage, res: ServerResponse): Promi
     });
 
     fs.mkdirSync(runDirAbs, { recursive: true });
+    jobLog(jobId, 'info', 'create: writing input files', { runDirAbs });
 
     const ref = refParts[0];
-    const refExt = guessImageExt(ref.filename, ref.contentType || undefined);
+    const refExt = sniffImageExt(ref.data);
+    if (!refExt) {
+      jobLog(jobId, 'warn', 'create: unsupported ref image format', { filename: ref.filename, contentType: ref.contentType });
+      await releaseUserInflight(redis, userId, jobId);
+      badRequest(res, `unsupported ref image format (supported: png/jpg/webp). filename=${ref.filename}`);
+      return;
+    }
     const refName = `ref${refExt}`;
     const refRel = safeRelPath(runDirRel, refName);
     fs.writeFileSync(path.join(runDirAbs, refName), ref.data);
@@ -186,7 +230,13 @@ async function handleCreateJob(req: IncomingMessage, res: ServerResponse): Promi
     const srcRels: string[] = [];
     for (let i = 0; i < srcParts.length; i++) {
       const src = srcParts[i];
-      const ext = guessImageExt(src.filename, src.contentType || undefined);
+      const ext = sniffImageExt(src.data);
+      if (!ext) {
+        jobLog(jobId, 'warn', 'create: unsupported source image format', { filename: src.filename, contentType: src.contentType });
+        await releaseUserInflight(redis, userId, jobId);
+        badRequest(res, `unsupported source image format (supported: png/jpg/webp). filename=${src.filename}`);
+        return;
+      }
       const name = `src_${i}${ext}`;
       const rel = safeRelPath(runDirRel, name);
       fs.writeFileSync(path.join(runDirAbs, name), src.data);
@@ -216,12 +266,15 @@ async function handleCreateJob(req: IncomingMessage, res: ServerResponse): Promi
 
     markJobQueued(db, jobId, { refRel, srcRels, debug });
     insertJobEvent(db, jobId, 'state', { state: 'queued' });
+    jobLog(jobId, 'info', 'create: queued in DB', { refRel, sources: srcRels.length });
 
     await queue.add('dual-track', { jobId, userId }, { jobId });
+    jobLog(jobId, 'info', 'create: enqueued to BullMQ', { queue: cfg.queueName });
 
     sendJson(res, 202, { jobId });
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
+    jobLog(jobId, 'error', 'create: internal error', { message: msg });
     markJobFailed(db, jobId, msg);
     insertJobEvent(db, jobId, 'error', { message: msg });
     await releaseUserInflight(redis, userId, jobId);
@@ -236,6 +289,42 @@ async function handleGetJob(jobId: string, res: ServerResponse): Promise<void> {
     return;
   }
   sendJson(res, 200, pub);
+}
+
+async function handleListJobs(req: IncomingMessage, res: ServerResponse, url: URL): Promise<void> {
+  const userIdRaw = String(req.headers['x-user-id'] || '').trim();
+  if (!userIdRaw) {
+    badRequest(res, 'missing X-User-Id header');
+    return;
+  }
+  const userId = sanitizeHeaderToken(userIdRaw);
+
+  const limitRaw = url.searchParams.get('limit');
+  const limitN = limitRaw ? Number(limitRaw) : NaN;
+  const limit = Number.isFinite(limitN) ? Math.trunc(limitN) : 50;
+  const safeLimit = Math.max(1, Math.min(200, limit));
+
+  const allowedStates = new Set(['creating', 'queued', 'running', 'completed', 'failed', 'canceled']);
+  const stateRaw = (url.searchParams.get('state') || '').trim().toLowerCase();
+
+  let states: any[] | null = null;
+  if (!stateRaw || stateRaw === 'all') {
+    states = null;
+  } else if (stateRaw === 'active') {
+    states = ['creating', 'queued', 'running'];
+  } else if (stateRaw === 'terminal' || stateRaw === 'done') {
+    states = ['completed', 'failed', 'canceled'];
+  } else {
+    const parts = stateRaw
+      .split(',')
+      .map((s) => s.trim())
+      .filter(Boolean)
+      .filter((s) => allowedStates.has(s));
+    states = parts.length > 0 ? parts : null;
+  }
+
+  const rows = listJobsByUser(db, userId, { states: states as any, limit: safeLimit });
+  sendJson(res, 200, rows.map(jobPublicFromRow));
 }
 
 async function handleCancel(jobId: string, res: ServerResponse): Promise<void> {
@@ -285,6 +374,7 @@ async function handleSse(jobId: string, req: IncomingMessage, res: ServerRespons
     notFound(res);
     return;
   }
+  jobLog(jobId, 'info', 'sse: client subscribed');
 
   res.statusCode = 200;
   res.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
@@ -326,6 +416,7 @@ async function handleSse(jobId: string, req: IncomingMessage, res: ServerRespons
     } catch {
       // ignore
     }
+    jobLog(jobId, 'info', 'sse: client disconnected');
   });
 }
 
@@ -368,6 +459,7 @@ async function handleProxyImage(jobId: string, idx: number, res: ServerResponse)
 
 async function main(): Promise<void> {
   await queueEvents.waitUntilReady();
+  log('info', `queueEvents ready (queue=${cfg.queueName})`);
 
   function broadcast(jobId: string, event: string, data: any): void {
     const subs = sseSubscribers.get(jobId);
@@ -381,21 +473,34 @@ async function main(): Promise<void> {
     }
   }
 
+  const lastProgressLogAt = new Map<string, number>();
+  const shouldLogProgress = (jobId: string) => {
+    const now = Date.now();
+    const last = lastProgressLogAt.get(jobId) || 0;
+    if (now - last < 2000) return false; // throttle
+    lastProgressLogAt.set(jobId, now);
+    return true;
+  };
+
   queueEvents.on('active', ({ jobId }) => {
     if (!jobId) return;
+    jobLog(String(jobId), 'info', 'queueEvents: active (running)');
     broadcast(String(jobId), 'state', { state: 'running' });
   });
   queueEvents.on('progress', ({ jobId, data }) => {
     if (!jobId) return;
+    if (shouldLogProgress(String(jobId))) jobLog(String(jobId), 'debug', 'queueEvents: progress', data);
     broadcast(String(jobId), 'progress', data);
   });
   queueEvents.on('completed', ({ jobId }) => {
     if (!jobId) return;
     const id = String(jobId);
+    jobLog(id, 'info', 'queueEvents: completed');
     broadcast(id, 'completed', jobPublic(id));
   });
   queueEvents.on('failed', ({ jobId, failedReason }) => {
     if (!jobId) return;
+    jobLog(String(jobId), 'warn', 'queueEvents: failed', { message: failedReason || 'failed' });
     broadcast(String(jobId), 'failed', { message: failedReason || 'failed' });
   });
 
@@ -425,6 +530,11 @@ async function main(): Promise<void> {
 
       if (method === 'POST' && url.pathname === '/v1/jobs') {
         await handleCreateJob(req, res);
+        return;
+      }
+
+      if (method === 'GET' && url.pathname === '/v1/jobs') {
+        await handleListJobs(req, res, url);
         return;
       }
 
@@ -458,6 +568,7 @@ async function main(): Promise<void> {
           service: 'meie-api',
           endpoints: [
             'POST /v1/jobs (multipart: ref + sources[] + params + debug)',
+            'GET  /v1/jobs (list jobs; requires X-User-Id)',
             'GET  /v1/jobs/:jobId',
             'GET  /v1/jobs/:jobId/events (SSE)',
             'GET  /v1/jobs/:jobId/images/:idx',
@@ -475,6 +586,23 @@ async function main(): Promise<void> {
     } catch (e) {
       sendJson(res, 500, { error: 'internal_error', message: e instanceof Error ? e.message : String(e) });
     }
+  });
+
+  server.on('error', (e: any) => {
+    const err = e as any;
+    if (err && err.code === 'EADDRINUSE') {
+      log('error', `listen failed: ${cfg.host}:${cfg.port} already in use`);
+      log('error', `Tip: find PID via "netstat -ano | findstr :${cfg.port}" then "taskkill /PID <pid> /T /F"`);
+      process.exitCode = 1;
+      try {
+        server.close();
+      } catch {
+        // ignore
+      }
+      return;
+    }
+    log('error', 'server error', { message: err?.message || String(err) });
+    process.exitCode = 1;
   });
 
   server.listen(cfg.port, cfg.host, () => {
