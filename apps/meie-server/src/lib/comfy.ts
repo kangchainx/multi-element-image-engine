@@ -9,6 +9,7 @@ export type SubmitResponse = {
 export type ImageOutput = { filename: string; subfolder: string; type: string };
 export type NodeOutput = { images?: ImageOutput[] };
 export type HistoryData = { outputs: Record<string, NodeOutput>; status?: { completed?: boolean; messages?: any[] } };
+export type SystemStats = { devices?: any[] };
 
 function toWsBase(httpBase: string): string {
   const u = new URL(httpBase);
@@ -47,6 +48,26 @@ export async function getHistoryEntry(comfyuiApiBase: string, promptId: string):
   if (json?.outputs) return json as HistoryData;
   if (json?.[promptId]) return json[promptId] as HistoryData;
   return null;
+}
+
+export async function getSystemStats(comfyuiApiBase: string, timeoutMs = 5000): Promise<SystemStats | null> {
+  const ac = new AbortController();
+  const t = setTimeout(() => ac.abort(), timeoutMs);
+  try {
+    const r = await fetch(`${comfyuiApiBase}/system_stats`, { signal: ac.signal });
+    if (!r.ok) return null;
+    return (await r.json()) as SystemStats;
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(t);
+  }
+}
+
+export async function getComfyDeviceCount(comfyuiApiBase: string, timeoutMs = 5000): Promise<number> {
+  const s = await getSystemStats(comfyuiApiBase, timeoutMs);
+  const n = Array.isArray(s?.devices) ? s!.devices!.length : 0;
+  return n > 0 ? n : 1;
 }
 
 export function flattenImages(h: HistoryData): ImageOutput[] {

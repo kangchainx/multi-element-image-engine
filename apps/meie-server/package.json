@@ -7,7 +7,7 @@
   "scripts": {
     "start": "tsx src/api/server.ts",
     "api": "tsx src/api/server.ts",
-    "worker": "tsx src/worker/worker.ts",
+    "worker": "tsx src/worker/index.ts",
     "dual-track": "tsx src/bin/dual-track.ts",
     "build": "tsc",
     "dev": "tsx watch src/api/server.ts",
@@ -15,6 +15,10 @@
   },
   "engines": {
     "node": ">=18.0.0"
+  },
+  "dependencies": {
+    "bullmq": "^5.0.0",
+    "ioredis": "^5.3.2"
   },
   "devDependencies": {
     "tsx": "^4.7.0"

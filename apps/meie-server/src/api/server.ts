@@ -6,9 +6,8 @@ import { Readable } from 'stream';
 
 import { loadConfig } from '../lib/config.js';
 import {
-  createJobOrThrow,
+  createJob,
   getJob,
-  getJobEventsSince,
   getJobResults,
   insertJobEvent,
   markJobCanceled,
@@ -20,9 +19,17 @@ import {
 } from '../db/db.js';
 import { parseMultipartForm } from '../http/multipart.js';
 import { guessImageExt, safeRelPath, sanitizeHeaderToken, sha256Hex } from '../lib/utils.js';
+import { createQueue, createQueueEvents } from '../queue/queue.js';
+import { createRedisConnection } from '../queue/redis.js';
+import { acquireUserInflight, releaseUserInflight } from '../queue/user-limit.js';
 
 const cfg = loadConfig();
 const db = openDb(cfg.dbPath);
+const redis = createRedisConnection(cfg.redisUrl, { role: 'api' });
+const queue = createQueue(cfg.queueName, redis);
+const queueEvents = createQueueEvents(cfg.queueName, createRedisConnection(cfg.redisUrl, { role: 'api-events' }));
+
+const sseSubscribers = new Map<string, Set<ServerResponse>>();
 
 type Json = null | boolean | number | string | Json[] | { [k: string]: Json };
 
@@ -107,10 +114,19 @@ async function handleCreateJob(req: IncomingMessage, res: ServerResponse): Promi
   }
   const userId = sanitizeHeaderToken(userIdRaw);
 
+  const jobId = randomUUID();
+
+  const acquired = await acquireUserInflight(redis, userId, jobId, { limit: 3, ttlSeconds: 86400 });
+  if (!acquired.ok) {
+    tooMany(res, 'too many concurrent jobs for this user', { inflight: acquired.inflight, limit: acquired.limit });
+    return;
+  }
+
   let parsed: Awaited<ReturnType<typeof parseMultipartForm>>;
   try {
     parsed = await parseMultipartForm(req, { maxBytes: cfg.maxUploadBytes, maxFiles: cfg.maxFiles });
   } catch (e) {
+    await releaseUserInflight(redis, userId, jobId);
     badRequest(res, e instanceof Error ? e.message : 'invalid multipart');
     return;
   }
@@ -118,10 +134,12 @@ async function handleCreateJob(req: IncomingMessage, res: ServerResponse): Promi
   const refParts = parsed.files.filter((f) => f.fieldName === 'ref');
   const srcParts = parsed.files.filter((f) => f.fieldName === 'sources');
   if (refParts.length !== 1) {
+    await releaseUserInflight(redis, userId, jobId);
     badRequest(res, 'expected exactly 1 file field named "ref"');
     return;
   }
   if (srcParts.length < 1) {
+    await releaseUserInflight(redis, userId, jobId);
     badRequest(res, 'expected >=1 file field named "sources"');
     return;
   }
@@ -129,31 +147,25 @@ async function handleCreateJob(req: IncomingMessage, res: ServerResponse): Promi
   const paramsRaw = (parsed.fields['params'] || [])[0];
   const params = paramsRaw ? parseJsonField<Record<string, any>>(paramsRaw) : null;
   if (paramsRaw && !params) {
+    await releaseUserInflight(redis, userId, jobId);
     badRequest(res, 'invalid params JSON');
     return;
   }
   const debug = ((parsed.fields['debug'] || [])[0] || '').trim() === '1';
 
-  const jobId = randomUUID();
-
-  // Insert a "creating" job row with concurrency guard (<=3 outstanding).
-  const cr = createJobOrThrow(db, {
-    jobId,
-    userId,
-    timeoutSeconds: cfg.jobTimeoutSeconds,
-    noProgressTimeoutSeconds: cfg.noProgressTimeoutSeconds,
-    paramsJson: params ? JSON.stringify(params) : null,
-    debug,
-  });
-  if (!cr.ok) {
-    tooMany(res, 'too many concurrent jobs for this user', { inflight: cr.inflight, limit: 3 });
-    return;
-  }
-
   const runDirRel = safeRelPath(cfg.uploadSubdir, jobId);
   const runDirAbs = path.join(cfg.comfyInputDir, runDirRel);
 
   try {
+    createJob(db, {
+      jobId,
+      userId,
+      timeoutSeconds: cfg.jobTimeoutSeconds,
+      noProgressTimeoutSeconds: cfg.noProgressTimeoutSeconds,
+      paramsJson: params ? JSON.stringify(params) : null,
+      debug,
+    });
+
     fs.mkdirSync(runDirAbs, { recursive: true });
 
     const ref = refParts[0];
@@ -205,11 +217,14 @@ async function handleCreateJob(req: IncomingMessage, res: ServerResponse): Promi
     markJobQueued(db, jobId, { refRel, srcRels, debug });
     insertJobEvent(db, jobId, 'state', { state: 'queued' });
 
+    await queue.add('dual-track', { jobId, userId }, { jobId });
+
     sendJson(res, 202, { jobId });
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
     markJobFailed(db, jobId, msg);
     insertJobEvent(db, jobId, 'error', { message: msg });
+    await releaseUserInflight(redis, userId, jobId);
     sendJson(res, 500, { error: 'internal_error', message: msg });
   }
 }
@@ -229,18 +244,38 @@ async function handleCancel(jobId: string, res: ServerResponse): Promise<void> {
     notFound(res);
     return;
   }
+
+  try {
+    const bullJob = await queue.getJob(jobId);
+    const bullState = bullJob ? await bullJob.getState() : null;
+
+    if (bullJob && bullState && ['waiting', 'delayed', 'paused'].includes(bullState)) {
+      await bullJob.remove();
+      markJobCanceled(db, jobId, 'canceled by user');
+      insertJobEvent(db, jobId, 'state', { state: 'canceled' });
+      await releaseUserInflight(redis, job.user_id, jobId);
+      sendJson(res, 200, { ok: true, state: 'canceled' });
+      return;
+    }
+
+    if (bullState === 'active' || job.state === 'running') {
+      requestCancel(db, jobId);
+      insertJobEvent(db, jobId, 'log', { message: 'cancel requested; worker will stop ASAP' });
+      sendJson(res, 202, { ok: true, state: 'cancel_requested' });
+      return;
+    }
+  } catch {
+    // ignore queue errors; fall back to DB state
+  }
+
   if (job.state === 'queued' || job.state === 'creating') {
     markJobCanceled(db, jobId, 'canceled by user');
     insertJobEvent(db, jobId, 'state', { state: 'canceled' });
+    await releaseUserInflight(redis, job.user_id, jobId);
     sendJson(res, 200, { ok: true, state: 'canceled' });
     return;
   }
-  if (job.state === 'running') {
-    requestCancel(db, jobId);
-    insertJobEvent(db, jobId, 'log', { message: 'cancel requested; worker will stop ASAP' });
-    sendJson(res, 202, { ok: true, state: 'cancel_requested' });
-    return;
-  }
+
   sendJson(res, 200, { ok: true, state: job.state });
 }
 
@@ -261,46 +296,31 @@ async function handleSse(jobId: string, req: IncomingMessage, res: ServerRespons
   // Snapshot
   sseWrite(res, { event: 'snapshot', data: jobPublic(jobId) });
 
-  let lastId = 0;
-  const lastEventIdHeader = String(req.headers['last-event-id'] || '').trim();
-  if (lastEventIdHeader) {
-    const n = Number(lastEventIdHeader);
-    if (Number.isFinite(n) && n > 0) lastId = Math.trunc(n);
-  }
-
-  // Replay existing events after lastId (client can resume).
-  for (const ev of getJobEventsSince(db, jobId, lastId, 200)) {
-    lastId = ev.id;
-    sseWrite(res, { id: ev.id, event: ev.event_type, data: parseJsonField(ev.payload_json) ?? ev.payload_json });
-  }
-
-  // Poll loop (no BullMQ deps in this environment).
-  const pollMs = 500;
   const pingMs = 15000;
   let closed = false;
   let lastPingAt = Date.now();
 
+  const sub = sseSubscribers.get(jobId) || new Set<ServerResponse>();
+  sub.add(res);
+  sseSubscribers.set(jobId, sub);
+
   const timer = setInterval(() => {
     if (closed) return;
-    try {
-      const events = getJobEventsSince(db, jobId, lastId, 200);
-      for (const ev of events) {
-        lastId = ev.id;
-        sseWrite(res, { id: ev.id, event: ev.event_type, data: parseJsonField(ev.payload_json) ?? ev.payload_json });
-      }
-      const now = Date.now();
-      if (now - lastPingAt >= pingMs) {
-        lastPingAt = now;
-        res.write(`: ping ${now}\n\n`);
-      }
-    } catch {
-      // ignore polling errors; connection will drop naturally if fatal.
+    const now = Date.now();
+    if (now - lastPingAt >= pingMs) {
+      lastPingAt = now;
+      res.write(`: ping ${now}\n\n`);
     }
-  }, pollMs);
+  }, pingMs);
 
   req.on('close', () => {
     closed = true;
     clearInterval(timer);
+    const set = sseSubscribers.get(jobId);
+    if (set) {
+      set.delete(res);
+      if (set.size === 0) sseSubscribers.delete(jobId);
+    }
     try {
       res.end();
     } catch {
@@ -347,6 +367,38 @@ async function handleProxyImage(jobId: string, idx: number, res: ServerResponse)
 }
 
 async function main(): Promise<void> {
+  await queueEvents.waitUntilReady();
+
+  function broadcast(jobId: string, event: string, data: any): void {
+    const subs = sseSubscribers.get(jobId);
+    if (!subs || subs.size === 0) return;
+    for (const r of subs) {
+      try {
+        sseWrite(r, { event, data });
+      } catch {
+        // ignore
+      }
+    }
+  }
+
+  queueEvents.on('active', ({ jobId }) => {
+    if (!jobId) return;
+    broadcast(String(jobId), 'state', { state: 'running' });
+  });
+  queueEvents.on('progress', ({ jobId, data }) => {
+    if (!jobId) return;
+    broadcast(String(jobId), 'progress', data);
+  });
+  queueEvents.on('completed', ({ jobId }) => {
+    if (!jobId) return;
+    const id = String(jobId);
+    broadcast(id, 'completed', jobPublic(id));
+  });
+  queueEvents.on('failed', ({ jobId, failedReason }) => {
+    if (!jobId) return;
+    broadcast(String(jobId), 'failed', { message: failedReason || 'failed' });
+  });
+
   const server = http.createServer(async (req, res) => {
     try {
       setCors(res);
@@ -365,6 +417,8 @@ async function main(): Promise<void> {
           comfyui: cfg.comfyuiApiBase,
           comfy_input_dir: cfg.comfyInputDir,
           db: cfg.dbPath,
+          redis: cfg.redisUrl,
+          queue: cfg.queueName,
         });
         return;
       }
@@ -430,6 +484,8 @@ async function main(): Promise<void> {
     console.log(`ComfyUI input: ${cfg.comfyInputDir}`);
     console.log(`Uploads: ${cfg.uploadSubdir}/<jobId>/...`);
     console.log(`DB: ${cfg.dbPath}`);
+    console.log(`Redis: ${cfg.redisUrl}`);
+    console.log(`Queue: ${cfg.queueName}`);
   });
 }
 

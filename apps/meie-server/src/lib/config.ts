@@ -8,6 +8,13 @@ export type MeieConfig = {
   comfyInputDir: string;
   uploadSubdir: string;
   outputDirPrefix: string;
+  redisUrl: string;
+  queueName: string;
+  jobsPerDevice: number;
+  workerMaxProcesses: number;
+  workerTotalConcurrency?: number;
+  workerProcesses?: number;
+  workerConcurrencyPerProcess: number;
   host: string;
   port: number;
   maxUploadBytes: number;
@@ -22,6 +29,12 @@ function toInt(v: string | undefined, fallback: number): number {
   if (!v) return fallback;
   const n = Number(v);
   return Number.isFinite(n) ? Math.trunc(n) : fallback;
+}
+
+function toMaybeInt(v: string | undefined): number | undefined {
+  if (!v) return undefined;
+  const n = Number(v);
+  return Number.isFinite(n) ? Math.trunc(n) : undefined;
 }
 
 function toFloat(v: string | undefined, fallback: number): number {
@@ -66,6 +79,14 @@ export function loadConfig(): MeieConfig {
   const uploadSubdir = (process.env.UPLOAD_SUBDIR || 'meie_uploads').trim();
   const outputDirPrefix = (process.env.OUTPUT_DIR_PREFIX || 'MEIE_RUNS').trim();
 
+  const redisUrl = (process.env.REDIS_URL || 'redis://127.0.0.1:6379').trim();
+  const queueName = (process.env.QUEUE_NAME || 'meie:jobs').trim();
+  const jobsPerDevice = toInt(process.env.JOBS_PER_DEVICE, 1);
+  const workerMaxProcesses = toInt(process.env.WORKER_MAX_PROCESSES, 8);
+  const workerTotalConcurrency = toMaybeInt(process.env.WORKER_TOTAL_CONCURRENCY);
+  const workerProcesses = toMaybeInt(process.env.WORKER_PROCESSES);
+  const workerConcurrencyPerProcess = toInt(process.env.WORKER_CONCURRENCY_PER_PROCESS, 1);
+
   const host = (process.env.HOST || '127.0.0.1').trim();
   const port = toInt(process.env.PORT, 8787);
 
@@ -83,6 +104,13 @@ export function loadConfig(): MeieConfig {
     comfyInputDir,
     uploadSubdir,
     outputDirPrefix,
+    redisUrl,
+    queueName,
+    jobsPerDevice,
+    workerMaxProcesses,
+    workerTotalConcurrency,
+    workerProcesses,
+    workerConcurrencyPerProcess,
     host,
     port,
     maxUploadBytes,
