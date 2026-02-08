@@ -2,32 +2,45 @@ import { randomUUID } from 'crypto';
 
 import { loadConfig } from '../lib/config.js';
 import {
-  claimNextQueuedJob,
   getJob,
   insertJobEvent,
   markJobCanceled,
   markJobCompleted,
   markJobFailed,
+  markJobRunning,
   openDb,
   replaceJobResults,
-  requestCancel,
   setJobComfyPromptId,
   setJobProgress,
 } from '../db/db.js';
 import { getHistoryEntry, comfyWsUrl, submitWorkflow } from '../lib/comfy.js';
 import { buildDualTrackWorkflow, loadBaseWorkflow, type DualTrackParams, type Workflow } from '../workflows/dual-track.js';
 import { nowMs, sleep } from '../lib/utils.js';
+import { createWorker } from '../queue/queue.js';
+import { createRedisConnection } from '../queue/redis.js';
+import { releaseUserInflight } from '../queue/user-limit.js';
 
 const cfg = loadConfig();
 const db = openDb(cfg.dbPath);
+const redis = createRedisConnection(cfg.redisUrl, { role: 'worker' });
+
+type QueueJobData = { jobId: string; userId: string };
 
 function parseParamsJson(paramsJson: string | null): DualTrackParams {
   if (!paramsJson) return {};
   try {
     const v = JSON.parse(paramsJson);
-    return (v && typeof v === 'object') ? (v as DualTrackParams) : {};
+    return v && typeof v === 'object' ? (v as DualTrackParams) : {};
   } catch {
     return {};
+  }
+}
+
+function safeUpdateProgress(bullJob: any, payload: any): void {
+  try {
+    void bullJob?.updateProgress(payload);
+  } catch {
+    // ignore
   }
 }
 
@@ -37,6 +50,7 @@ function startComfyProgressWs(opts: {
   promptId: string;
   workflow: Workflow;
   jobId: string;
+  bullJob: any;
   onProgress: (p: any) => void;
   onExecuting: (e: any) => void;
   onError: (e: any) => void;
@@ -86,6 +100,7 @@ function startComfyProgressWs(opts: {
           lastExecKey = key;
           const payload = { nodeId, title, classType: cls };
           opts.onExecuting(payload);
+          safeUpdateProgress(opts.bullJob, { phase: 'executing', ...payload, ts: Date.now() });
         }
       } else if (msg.type === 'progress' && msg.data?.prompt_id === opts.promptId) {
         lastProgressAtRef.v = nowMs();
@@ -94,6 +109,8 @@ function startComfyProgressWs(opts: {
         if (typeof v === 'number' && typeof m === 'number') {
           const payload = { step: v, steps: m };
           opts.onProgress(payload);
+          safeUpdateProgress(opts.bullJob, { phase: 'sampling', ...payload, ts: Date.now() });
+
           // Avoid writing too many rows; debounce to ~1Hz for logs.
           if (nowMs() - lastProgressLogAt > 1000) {
             lastProgressLogAt = nowMs();
@@ -135,19 +152,13 @@ async function pollHistoryUntilDone(opts: {
   while (true) {
     // Cancel?
     const job = getJob(db, opts.jobId);
-    if (job?.cancel_requested) {
-      throw new Error('canceled');
-    }
+    if (job?.cancel_requested) throw new Error('canceled');
 
     const elapsed = (nowMs() - startedAt) / 1000;
-    if (elapsed > opts.timeoutSeconds) {
-      throw new Error(`timeout after ${Math.trunc(elapsed)}s`);
-    }
+    if (elapsed > opts.timeoutSeconds) throw new Error(`timeout after ${Math.trunc(elapsed)}s`);
 
     const noProg = (nowMs() - opts.lastProgressAtRef.v) / 1000;
-    if (noProg > opts.noProgressTimeoutSeconds) {
-      throw new Error(`no progress for ${Math.trunc(noProg)}s`);
-    }
+    if (noProg > opts.noProgressTimeoutSeconds) throw new Error(`no progress for ${Math.trunc(noProg)}s`);
 
     const h = await getHistoryEntry(opts.comfyuiApiBase, opts.promptId);
     if (h) return h;
@@ -155,20 +166,19 @@ async function pollHistoryUntilDone(opts: {
   }
 }
 
-async function processJob(jobId: string, baseWorkflow: Workflow): Promise<void> {
+async function processJob(jobId: string, bullJob: any, baseWorkflow: Workflow): Promise<void> {
   const row = getJob(db, jobId);
-  if (!row) return;
+  if (!row) throw new Error('job not found');
 
+  if (!row.ref_rel || !row.src_rels_json) throw new Error('missing input file refs in DB');
+
+  markJobRunning(db, jobId);
   insertJobEvent(db, jobId, 'state', { state: 'running' });
   setJobProgress(db, jobId, { phase: 'running' });
+  safeUpdateProgress(bullJob, { phase: 'running', ts: Date.now() });
 
-  if (!row.ref_rel || !row.src_rels_json) {
-    throw new Error('missing input file refs in DB');
-  }
   const srcRels = JSON.parse(row.src_rels_json) as string[];
   const params = parseParamsJson(row.params_json);
-
-  // Reasonable default for non-square source refs: avoid center-crop.
   if (!params.ipadapter_crop_position) params.ipadapter_crop_position = 'pad';
 
   const workflow = buildDualTrackWorkflow({
@@ -187,6 +197,7 @@ async function processJob(jobId: string, baseWorkflow: Workflow): Promise<void> 
   const submit = await submitWorkflow(cfg.comfyuiApiBase, workflow, clientId);
   setJobComfyPromptId(db, jobId, submit.prompt_id);
   insertJobEvent(db, jobId, 'log', { message: `submitted prompt_id=${submit.prompt_id} queue=${submit.number}` });
+  safeUpdateProgress(bullJob, { phase: 'submitted', promptId: submit.prompt_id, queue: submit.number, ts: Date.now() });
 
   const ws = startComfyProgressWs({
     comfyuiApiBase: cfg.comfyuiApiBase,
@@ -194,6 +205,7 @@ async function processJob(jobId: string, baseWorkflow: Workflow): Promise<void> 
     promptId: submit.prompt_id,
     workflow,
     jobId,
+    bullJob,
     onExecuting: (e) => insertJobEvent(db, jobId, 'progress', { phase: 'executing', ...e }),
     onProgress: (p) => insertJobEvent(db, jobId, 'progress', { phase: 'sampling', ...p }),
     onError: (e) => insertJobEvent(db, jobId, 'error', e),
@@ -237,43 +249,50 @@ async function processJob(jobId: string, baseWorkflow: Workflow): Promise<void> 
   insertJobEvent(db, jobId, 'result', {
     images: imgs.map((_, idx) => ({ idx, url: `/v1/jobs/${jobId}/images/${idx}` })),
   });
+  safeUpdateProgress(bullJob, { phase: 'completed', ts: Date.now() });
 }
 
 async function main(): Promise<void> {
   const baseWorkflow = await loadBaseWorkflow();
-  insertJobEvent(db, 'system', 'log', { message: 'worker started' });
+  const concurrency = Number(process.env.WORKER_CONCURRENCY || cfg.workerConcurrencyPerProcess || 1);
+  insertJobEvent(db, 'system', 'log', { message: `worker started pid=${process.pid} concurrency=${concurrency}` });
 
-  // Simple polling worker. For scale/outside sandbox, swap this with BullMQ.
-  while (true) {
-    const claimed = claimNextQueuedJob(db);
-    if (!claimed) {
-      await sleep(500);
-      continue;
-    }
+  const worker = createWorker<QueueJobData, any>(
+    cfg.queueName,
+    redis,
+    async (bullJob: any) => {
+      const jobId = String(bullJob?.data?.jobId || bullJob?.id || '');
+      const userId = String(bullJob?.data?.userId || '');
+      if (!jobId || !userId) throw new Error('missing jobId/userId in queue payload');
 
-    const jobId = claimed.job_id;
-    try {
-      await processJob(jobId, baseWorkflow);
-    } catch (e) {
-      const msg = e instanceof Error ? e.message : String(e);
-      if (msg === 'canceled') {
-        markJobCanceled(db, jobId, 'canceled by user');
-        insertJobEvent(db, jobId, 'state', { state: 'canceled' });
-      } else {
+      try {
+        await processJob(jobId, bullJob, baseWorkflow);
+        return { jobId, state: 'completed' };
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        if (msg === 'canceled') {
+          markJobCanceled(db, jobId, 'canceled by user');
+          insertJobEvent(db, jobId, 'state', { state: 'canceled' });
+          safeUpdateProgress(bullJob, { phase: 'canceled', ts: Date.now() });
+          return { jobId, state: 'canceled' };
+        }
+
         markJobFailed(db, jobId, msg);
         insertJobEvent(db, jobId, 'state', { state: 'failed' });
         insertJobEvent(db, jobId, 'error', { message: msg });
+        safeUpdateProgress(bullJob, { phase: 'failed', message: msg, ts: Date.now() });
+        throw e;
+      } finally {
+        await releaseUserInflight(redis, userId, jobId);
       }
-    } finally {
-      // If cancel was requested while running, ensure state is updated.
-      const j = getJob(db, jobId);
-      if (j?.cancel_requested && j.state === 'running') {
-        requestCancel(db, jobId);
-        markJobCanceled(db, jobId, 'canceled by user');
-        insertJobEvent(db, jobId, 'state', { state: 'canceled' });
-      }
-    }
-  }
+    },
+    { concurrency },
+  );
+
+  worker.on('error', (e: any) => {
+    // eslint-disable-next-line no-console
+    console.error('BullMQ worker error:', e);
+  });
 }
 
 main().catch((e) => {
@@ -281,3 +300,4 @@ main().catch((e) => {
   console.error('Fatal worker error:', e);
   process.exit(1);
 });
+

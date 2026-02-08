@@ -123,7 +123,7 @@ function rollback(db: DatabaseSync): void {
   db.exec('ROLLBACK;');
 }
 
-export function createJobOrThrow(
+export function createJob(
   db: DatabaseSync,
   job: {
     jobId: string;
@@ -133,56 +133,30 @@ export function createJobOrThrow(
     paramsJson: string | null;
     debug: boolean;
   },
-): { ok: true } | { ok: false; error: 'limit'; inflight: number } {
+): void {
   const ts = nowMs();
-  beginImmediate(db);
-  try {
-    const row = db
-      .prepare(
-        `SELECT COUNT(*) AS n
-         FROM jobs
-         WHERE user_id = ?
-           AND state IN ('creating','queued','running')`,
-      )
-      .get(job.userId) as any;
-    const inflight = Number(row?.n ?? 0);
-    if (inflight >= 3) {
-      rollback(db);
-      return { ok: false, error: 'limit', inflight };
-    }
-
-    db.prepare(
-      `INSERT INTO jobs (
-         job_id, user_id, state, created_at, updated_at,
-         timeout_seconds, no_progress_timeout_seconds,
-         comfy_prompt_id, error, params_json, debug,
-         ref_rel, src_rels_json, progress_json, cancel_requested
-       ) VALUES (
-         ?, ?, 'creating', ?, ?,
-         ?, ?,
-         NULL, NULL, ?, ?,
-         NULL, NULL, NULL, 0
-       )`,
-    ).run(
-      job.jobId,
-      job.userId,
-      ts,
-      ts,
-      Math.trunc(job.timeoutSeconds),
-      Math.trunc(job.noProgressTimeoutSeconds),
-      job.paramsJson,
-      job.debug ? 1 : 0,
-    );
-    commit(db);
-    return { ok: true };
-  } catch (e) {
-    try {
-      rollback(db);
-    } catch {
-      // ignore
-    }
-    throw e;
-  }
+  db.prepare(
+    `INSERT INTO jobs (
+       job_id, user_id, state, created_at, updated_at,
+       timeout_seconds, no_progress_timeout_seconds,
+       comfy_prompt_id, error, params_json, debug,
+       ref_rel, src_rels_json, progress_json, cancel_requested
+     ) VALUES (
+       ?, ?, 'creating', ?, ?,
+       ?, ?,
+       NULL, NULL, ?, ?,
+       NULL, NULL, NULL, 0
+     )`,
+  ).run(
+    job.jobId,
+    job.userId,
+    ts,
+    ts,
+    Math.trunc(job.timeoutSeconds),
+    Math.trunc(job.noProgressTimeoutSeconds),
+    job.paramsJson,
+    job.debug ? 1 : 0,
+  );
 }
 
 export function markJobQueued(
@@ -322,41 +296,4 @@ export function getJobEventsSince(db: DatabaseSync, jobId: string, sinceId: numb
   return (db
     .prepare(`SELECT * FROM job_events WHERE job_id=? AND id>? ORDER BY id ASC LIMIT ?`)
     .all(jobId, sinceId, limit) as any[]) as JobEventRow[];
-}
-
-export function claimNextQueuedJob(db: DatabaseSync): JobRow | null {
-  beginImmediate(db);
-  try {
-    const row = db
-      .prepare(
-        `SELECT *
-         FROM jobs
-         WHERE state='queued'
-         ORDER BY created_at ASC
-         LIMIT 1`,
-      )
-      .get() as any;
-    if (!row) {
-      commit(db);
-      return null;
-    }
-
-    const ts = nowMs();
-    const r = db
-      .prepare(`UPDATE jobs SET state='running', started_at=COALESCE(started_at, ?), updated_at=? WHERE job_id=? AND state='queued'`)
-      .run(ts, ts, row.job_id) as any;
-    if (Number(r?.changes ?? 0) !== 1) {
-      rollback(db);
-      return null;
-    }
-    commit(db);
-    return row as JobRow;
-  } catch (e) {
-    try {
-      rollback(db);
-    } catch {
-      // ignore
-    }
-    throw e;
-  }
 }
