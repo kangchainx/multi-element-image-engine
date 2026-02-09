@@ -1,0 +1,280 @@
+{
+  "1": {
+    "inputs": { "ckpt_name": "sd_xl_base_1.0.safetensors" },
+    "class_type": "CheckpointLoaderSimple",
+    "pos": [0, 300],
+    "_meta": { "title": "Checkpoint Loader (SDXL)" }
+  },
+  "2": {
+    "inputs": {
+      "text": ["45", 0],
+      "clip": ["1", 1]
+    },
+    "class_type": "CLIPTextEncode",
+    "pos": [260, 260],
+    "_meta": { "title": "POS_PROMPT" }
+  },
+  "3": {
+    "inputs": {
+      "text": "text, watermark, logo, lowres, blurry, artifacts",
+      "clip": ["1", 1]
+    },
+    "class_type": "CLIPTextEncode",
+    "pos": [260, 340],
+    "_meta": { "title": "NEG_PROMPT" }
+  },
+  "4": {
+    "inputs": { "width": 512, "height": 896, "batch_size": 1 },
+    "class_type": "EmptyLatentImage",
+    "pos": [520, 300],
+    "_meta": { "title": "Empty Latent" }
+  },
+  "5": {
+    "inputs": {
+      "seed": 0,
+      "steps": 30,
+      "cfg": 6.5,
+      "sampler_name": "euler",
+      "scheduler": "normal",
+      "denoise": 1,
+      "model": ["23", 0],
+      "positive": ["13", 0],
+      "negative": ["13", 1],
+      "latent_image": ["4", 0]
+    },
+    "class_type": "KSampler",
+    "pos": [1040, 300],
+    "_meta": { "title": "KSampler" }
+  },
+  "6": {
+    "inputs": { "samples": ["5", 0], "vae": ["1", 2] },
+    "class_type": "VAEDecode",
+    "pos": [1300, 300],
+    "_meta": { "title": "VAE Decode" }
+  },
+  "7": {
+    "inputs": { "filename_prefix": "MEIE_DualTrackInjection", "images": ["6", 0] },
+    "class_type": "SaveImage",
+    "pos": [1560, 300],
+    "_meta": { "title": "SaveImage" }
+  },
+
+  "10": {
+    "inputs": { "image": "REF_COMPOSITION.png" },
+    "class_type": "LoadImage",
+    "pos": [0, 100],
+    "_meta": { "title": "REF_COMPOSITION" }
+  },
+  "11": {
+    "inputs": { "image": ["10", 0], "low_threshold": 0.4, "high_threshold": 0.8 },
+    "class_type": "Canny",
+    "pos": [260, 100],
+    "_meta": { "title": "Canny Preprocessor" }
+  },
+  "12": {
+    "inputs": { "control_net_name": "controlnet-canny-sdxl-1.0.safetensors" },
+    "class_type": "ControlNetLoader",
+    "pos": [520, 100],
+    "_meta": { "title": "ControlNet Loader (Canny)" }
+  },
+  "14": {
+    "inputs": { "image": ["10", 0] },
+    "class_type": "DepthAnythingV2Preprocessor",
+    "pos": [260, 20],
+    "_meta": { "title": "DEPTH_PREPROCESS" }
+  },
+  "15": {
+    "inputs": { "control_net_name": "controlnet-depth-sdxl-1.0.safetensors" },
+    "class_type": "ControlNetLoader",
+    "pos": [520, 20],
+    "_meta": { "title": "ControlNet Loader (Depth)" }
+  },
+  "16": {
+    "inputs": {
+      "positive": ["2", 0],
+      "negative": ["3", 0],
+      "control_net": ["15", 0],
+      "image": ["14", 0],
+      "vae": ["1", 2],
+      "strength": 1.0,
+      "start_percent": 0.0,
+      "end_percent": 1.0
+    },
+    "class_type": "ControlNetApplyAdvanced",
+    "pos": [780, 20],
+    "_meta": { "title": "CONTROLNET_APPLY_DEPTH" }
+  },
+  "13": {
+    "inputs": {
+      "positive": ["16", 0],
+      "negative": ["16", 1],
+      "control_net": ["12", 0],
+      "image": ["11", 0],
+      "vae": ["1", 2],
+      "strength": 0.5,
+      "start_percent": 0.0,
+      "end_percent": 1.0
+    },
+    "class_type": "ControlNetApplyAdvanced",
+    "pos": [780, 100],
+    "_meta": { "title": "CONTROLNET_APPLY_CANNY" }
+  },
+
+  "20": {
+    "inputs": { "image": "SRC_FEATURE_STYLE.png" },
+    "class_type": "LoadImage",
+    "pos": [0, 500],
+    "_meta": { "title": "SRC_FEATURE_STYLE" }
+  },
+  "21": {
+    "inputs": { "clip_name": "CLIP-ViT-H-14-laion2B-s32B-b79K.safetensors" },
+    "class_type": "CLIPVisionLoader",
+    "pos": [260, 500],
+    "_meta": { "title": "CLIPVisionLoader" }
+  },
+  "22": {
+    "inputs": { "ipadapter_file": "ip-adapter-plus_sdxl_vit-h.safetensors" },
+    "class_type": "IPAdapterModelLoader",
+    "pos": [520, 500],
+    "_meta": { "title": "IPAdapterModelLoader" }
+  },
+  "23": {
+    "inputs": {
+      "model": ["1", 0],
+      "ipadapter": ["22", 0],
+      "image": ["20", 0],
+      "weight": 0.7,
+      "weight_type": "linear",
+      "combine_embeds": "concat",
+      "start_at": 0,
+      "end_at": 0.8,
+      "embeds_scaling": "V only",
+      "clip_vision": ["21", 0],
+      "attn_mask": ["63", 1]
+    },
+    "class_type": "IPAdapterAdvanced",
+    "pos": [780, 500],
+    "_meta": { "title": "IPAdapterAdvanced (Track B)" }
+  },
+
+  "60": {
+    "inputs": {
+      "model": "microsoft/Florence-2-base",
+      "precision": "fp16",
+      "attention": "sdpa"
+    },
+    "class_type": "DownloadAndLoadFlorence2Model",
+    "pos": [0, 220],
+    "_meta": { "title": "FLORENCE_MODEL" }
+  },
+  "30": {
+    "inputs": {
+      "image": ["10", 0],
+      "florence2_model": ["60", 0],
+      "text_input": "",
+      "task": "detailed_caption",
+      "fill_mask": true
+    },
+    "class_type": "Florence2Run",
+    "pos": [260, 220],
+    "_meta": { "title": "FLORENCE_REF" }
+  },
+  "31": {
+    "inputs": {
+      "image": ["20", 0],
+      "florence2_model": ["60", 0],
+      "text_input": "",
+      "task": "caption",
+      "fill_mask": true
+    },
+    "class_type": "Florence2Run",
+    "pos": [260, 620],
+    "_meta": { "title": "FLORENCE_SRC" }
+  },
+
+  "37": {
+    "inputs": { "string": ["30", 2], "start": 0, "end": 80 },
+    "class_type": "StringSubstring",
+    "pos": [520, 220],
+    "_meta": { "title": "REF_CAPTION_SHORT" }
+  },
+  "38": {
+    "inputs": { "string": ["37", 0], "mode": "Both" },
+    "class_type": "StringTrim",
+    "pos": [780, 220],
+    "_meta": { "title": "REF_CAPTION_TRIM" }
+  },
+  "39": {
+    "inputs": { "string": ["31", 2], "start": 0, "end": 80 },
+    "class_type": "StringSubstring",
+    "pos": [520, 620],
+    "_meta": { "title": "SRC_CAPTION_SHORT" }
+  },
+  "40": {
+    "inputs": { "string": ["39", 0], "mode": "Both" },
+    "class_type": "StringTrim",
+    "pos": [780, 620],
+    "_meta": { "title": "SRC_CAPTION_TRIM" }
+  },
+  "41": {
+    "inputs": { "value": " made of " },
+    "class_type": "PrimitiveString",
+    "pos": [1040, 220],
+    "_meta": { "title": "PROMPT_MADE_OF" }
+  },
+  "42": {
+    "inputs": { "value": ", high quality, 8k wallpaper." },
+    "class_type": "PrimitiveString",
+    "pos": [1040, 260],
+    "_meta": { "title": "PROMPT_SUFFIX" }
+  },
+  "43": {
+    "inputs": { "string_a": ["38", 0], "string_b": ["41", 0], "delimiter": "" },
+    "class_type": "StringConcatenate",
+    "pos": [1300, 220],
+    "_meta": { "title": "PROMPT_REF_PLUS" }
+  },
+  "44": {
+    "inputs": { "string_a": ["43", 0], "string_b": ["40", 0], "delimiter": "" },
+    "class_type": "StringConcatenate",
+    "pos": [1560, 220],
+    "_meta": { "title": "PROMPT_REF_MADEOF_SRC" }
+  },
+  "45": {
+    "inputs": { "string_a": ["44", 0], "string_b": ["42", 0], "delimiter": "" },
+    "class_type": "StringConcatenate",
+    "pos": [1820, 220],
+    "_meta": { "title": "AUTO_POS_PROMPT" }
+  },
+
+  "61": {
+    "inputs": { "model_name": "GroundingDINO_SwinT_OGC (694MB)" },
+    "class_type": "GroundingDinoModelLoader (segment anything)",
+    "pos": [0, 20],
+    "_meta": { "title": "GROUNDING_DINO_MODEL" }
+  },
+  "62": {
+    "inputs": { "model_name": "mobile_sam(39MB)" },
+    "class_type": "SAMModelLoader (segment anything)",
+    "pos": [0, 60],
+    "_meta": { "title": "SAM_MODEL" }
+  },
+  "63": {
+    "inputs": {
+      "sam_model": ["62", 0],
+      "grounding_dino_model": ["61", 0],
+      "image": ["10", 0],
+      "prompt": ["38", 0],
+      "threshold": 0.3
+    },
+    "class_type": "GroundingDinoSAMSegment (segment anything)",
+    "pos": [260, 20],
+    "_meta": { "title": "SUBJECT_MASK" }
+  },
+  "64": {
+    "inputs": { "mask": ["63", 1] },
+    "class_type": "MaskPreview",
+    "pos": [520, 20],
+    "_meta": { "title": "DEBUG_MASK_PREVIEW" }
+  }
+}

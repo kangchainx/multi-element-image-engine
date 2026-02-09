@@ -42,7 +42,25 @@ MEIE 是一个把 **多张输入图片**（1 张参考图 `REF` + N 张素材图
 
 - `apps/meie-ui`: React + Vite 前端
 - `apps/meie-server`: Node.js 后端（API + Worker + SQLite + BullMQ）
-- `workflow_api.json`: ComfyUI workflow（后端会在运行时把输入文件名等字段写进去）
+- `workflow_api.json`: 旧版 ComfyUI workflow（legacy）
+- `workflow_api.lite.json`: lite workflow（Depth + Canny 双 ControlNet + IPAdapter，多数场景推荐默认）
+- `workflow_api.full.json`: full workflow（在 lite 基础上增加：自动 Prompt、自动 Mask、可选后处理；对节点依赖更多）
+  - 约定：后端会优先通过关键节点的 `_meta.title` 定位节点（例如 `POS_PROMPT` / `NEG_PROMPT` / `REF_COMPOSITION` / `SRC_FEATURE_STYLE` / `IPAdapterAdvanced (Track B)` 等）。
+  - 如果你在 ComfyUI 里编辑并重新导出 workflow，建议尽量保持这些标题不变；否则需要同步更新后端的 title 映射（或确保关键节点的 id 仍与默认一致）。
+
+## Workflow 模式（params.workflow_mode）
+
+`POST /v1/jobs` 的 `params` 支持选择工作流模式：
+
+```json
+{
+  "workflow_mode": "lite",
+  "workflow_strict": false
+}
+```
+
+- `workflow_mode`: `"lite"` 或 `"full"`（默认 `"lite"`）
+- `workflow_strict`: `true` 时若缺少节点类型会直接失败；`false` 时会自动回退到更简单的 workflow（full -> lite -> legacy）
 
 ## 架构概览
 

@@ -22,6 +22,7 @@ import { jobLog, log } from '../lib/log.js';
 import { createWorker } from '../queue/queue.js';
 import { createRedisConnection } from '../queue/redis.js';
 import { releaseUserInflight } from '../queue/user-limit.js';
+import WebSocket from 'ws';
 
 const cfg = loadConfig();
 const db = openDb(cfg.dbPath);
@@ -37,6 +38,22 @@ function parseParamsJson(paramsJson: string | null): DualTrackParams {
   } catch {
     return {};
   }
+}
+
+type WorkflowMode = 'legacy' | 'lite' | 'full';
+
+function asWorkflowMode(v: any): WorkflowMode {
+  const s = typeof v === 'string' ? v.trim().toLowerCase() : '';
+  if (s === 'full') return 'full';
+  if (s === 'lite') return 'lite';
+  // only accept legacy internally; users pass lite/full.
+  return 'lite';
+}
+
+function truthy(v: any): boolean {
+  if (v === true) return true;
+  const s = typeof v === 'string' ? v.trim().toLowerCase() : '';
+  return ['1', 'true', 'yes', 'y', 'on'].includes(s);
 }
 
 function safeUpdateProgress(bullJob: any, payload: any): void {
@@ -59,7 +76,7 @@ function startComfyProgressWs(opts: {
   onError: (e: any) => void;
 }): { close: () => void; lastProgressAtRef: { v: number } } {
   const url = comfyWsUrl(opts.comfyuiApiBase, opts.clientId);
-  const WS = (globalThis as any).WebSocket as any;
+  const WS = (((globalThis as any).WebSocket ?? WebSocket) as any);
   const lastProgressAtRef = { v: nowMs() };
 
   if (!WS) {
@@ -205,6 +222,27 @@ function listLoadImageNodes(workflow: Workflow): Array<{ nodeId: string; image: 
   return out;
 }
 
+function findFinalSaveNodeId(workflow: Workflow, outputDirPrefix: string, jobId: string): string | null {
+  const expected = `${outputDirPrefix}/${jobId}/final`;
+  const hits: string[] = [];
+  for (const [nodeId, node] of Object.entries(workflow || {})) {
+    if (!node || typeof node !== 'object') continue;
+    if (node.class_type !== 'SaveImage') continue;
+    const prefix = (node.inputs as any)?.filename_prefix;
+    if (typeof prefix !== 'string') continue;
+    if (prefix === expected) hits.push(nodeId);
+  }
+  if (hits.length === 1) return hits[0];
+  if (hits.length > 1) {
+    // Deterministic tie-break: choose smallest numeric node id.
+    const sorted = hits
+      .map((x) => ({ id: x, n: Number(x) }))
+      .sort((a, b) => (Number.isFinite(a.n) ? a.n : Number.MAX_SAFE_INTEGER) - (Number.isFinite(b.n) ? b.n : Number.MAX_SAFE_INTEGER));
+    return sorted[0]?.id ?? null;
+  }
+  return null;
+}
+
 async function processJob(jobId: string, bullJob: any, baseWorkflow: Workflow): Promise<void> {
   const row = getJob(db, jobId);
   if (!row) throw new Error('job not found');
@@ -234,16 +272,85 @@ async function processJob(jobId: string, bullJob: any, baseWorkflow: Workflow): 
   const params = parseParamsJson(row.params_json);
   if (!params.ipadapter_crop_position) params.ipadapter_crop_position = 'pad';
 
-  jobLog(jobId, 'info', 'worker: building workflow', { comfy: cfg.comfyuiApiBase });
-  const workflow = buildDualTrackWorkflow({
-    base: baseWorkflow,
-    jobId,
-    outputDirPrefix: cfg.outputDirPrefix,
-    refRel: row.ref_rel,
-    srcRels,
-    params,
-    debug: Boolean(row.debug),
-  });
+  // Workflow selection with fallback:
+  // - default: lite
+  // - if selected workflow references missing node types, fallback to simpler workflows unless workflow_strict=true.
+  const requestedMode = asWorkflowMode((params as any)?.workflow_mode);
+  const strict = truthy((params as any)?.workflow_strict);
+  const candidates: WorkflowMode[] =
+    requestedMode === 'full' ? ['full', 'lite', 'legacy'] :
+    requestedMode === 'lite' ? ['lite', 'legacy'] :
+    ['legacy'];
+
+  const obj = await getObjectInfo(cfg.comfyuiApiBase, 5000);
+  let workflow: Workflow | null = null;
+  let usedMode: WorkflowMode | null = null;
+  let lastMissing: string[] = [];
+
+  for (const mode of candidates) {
+    let baseWf: Workflow | null = null;
+    if (mode === 'legacy') {
+      baseWf = baseWorkflow;
+    } else {
+      // Lazy import to avoid circulars and keep worker startup simple.
+      const m = await import('../workflows/dual-track.js');
+      const filename = m.workflowFilenameForMode(mode);
+      try {
+        baseWf = await m.loadWorkflowFileFromRepoRoot(filename);
+      } catch {
+        baseWf = null;
+      }
+    }
+
+    if (!baseWf) continue;
+
+    const built = buildDualTrackWorkflow({
+      base: baseWf,
+      jobId,
+      outputDirPrefix: cfg.outputDirPrefix,
+      refRel: row.ref_rel,
+      srcRels,
+      params,
+      debug: Boolean(row.debug),
+    });
+
+    if (obj) {
+      const types = listWorkflowNodeTypes(built);
+      const missing = types.filter((t) => !(t in obj));
+      if (missing.length > 0) {
+        lastMissing = missing;
+        jobLog(jobId, 'warn', 'preflight: missing ComfyUI node types for candidate workflow', { mode, missing });
+        if (strict) break;
+        continue;
+      }
+    }
+
+    workflow = built;
+    usedMode = mode;
+    break;
+  }
+
+  if (!workflow || !usedMode) {
+    if (strict && lastMissing.length > 0) {
+      throw new Error(`ComfyUI is missing required node types for workflow_mode="${requestedMode}": ${lastMissing.join(', ')}`);
+    }
+    // If we couldn't load any mode-specific workflow file, fall back to legacy baseWorkflow build.
+    workflow = buildDualTrackWorkflow({
+      base: baseWorkflow,
+      jobId,
+      outputDirPrefix: cfg.outputDirPrefix,
+      refRel: row.ref_rel,
+      srcRels,
+      params,
+      debug: Boolean(row.debug),
+    });
+    usedMode = 'legacy';
+  }
+
+  if (usedMode !== requestedMode) {
+    insertJobEvent(db, jobId, 'log', { message: `workflow fallback: requested=${requestedMode} used=${usedMode}` });
+    jobLog(jobId, 'warn', 'workflow fallback', { requested: requestedMode, used: usedMode });
+  }
 
   // Guarantee the workflow only reads the exact uploaded images we saved for this job.
   // If the base workflow references some other input filename, fail fast with a clear error.
@@ -276,7 +383,6 @@ async function processJob(jobId: string, bullJob: any, baseWorkflow: Workflow): 
 
   // Preflight: verify ComfyUI supports all node types referenced by this workflow.
   // Fail fast with a clearer error than /prompt 400 missing_node_type.
-  const obj = await getObjectInfo(cfg.comfyuiApiBase, 5000);
   if (obj) {
     const types = listWorkflowNodeTypes(workflow);
     const missing = types.filter((t) => !(t in obj));
@@ -332,10 +438,11 @@ async function processJob(jobId: string, bullJob: any, baseWorkflow: Workflow): 
 
   jobLog(jobId, 'info', 'worker: ComfyUI history ready');
   const outputs = (history?.outputs || {}) as Record<string, any>;
-  const finalImgs = Array.isArray(outputs?.['7']?.images) ? (outputs['7'].images as any[]) : [];
+  const finalNodeId = findFinalSaveNodeId(workflow, cfg.outputDirPrefix, jobId);
+  const finalImgs = finalNodeId && Array.isArray(outputs?.[finalNodeId]?.images) ? (outputs[finalNodeId].images as any[]) : [];
   const otherImgs: any[] = [];
   for (const [nodeId, nodeOut] of Object.entries(outputs)) {
-    if (nodeId === '7') continue; // keep final first
+    if (finalNodeId && nodeId === finalNodeId) continue; // keep final first
     for (const img of (nodeOut as any)?.images || []) otherImgs.push(img);
   }
   const imgs = [...finalImgs, ...otherImgs];

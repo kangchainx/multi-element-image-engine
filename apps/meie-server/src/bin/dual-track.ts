@@ -114,19 +114,36 @@ async function loadWorkflow(): Promise<Workflow> {
   return JSON.parse(fileContent) as Workflow;
 }
 
+function findNodeIdByTitle(workflow: Workflow, title: string, classType?: string): string | null {
+  const hits: string[] = [];
+  for (const [id, node] of Object.entries(workflow || {})) {
+    if (!node || typeof node !== 'object') continue;
+    const t = node?._meta?.title;
+    if (t !== title) continue;
+    if (classType && node.class_type !== classType) continue;
+    hits.push(id);
+  }
+  if (hits.length === 1) return hits[0];
+  if (hits.length > 1) {
+    hits.sort((a, b) => (Number(a) || 0) - (Number(b) || 0));
+    return hits[0];
+  }
+  return null;
+}
+
 function applyOverrides(workflow: Workflow): Workflow {
-  // Node ids match workflow_api.json in repo root.
-  const POS_NODE_ID = '2';
-  const NEG_NODE_ID = '3';
-  const KSAMPLER_NODE_ID = '5';
-  const EMPTY_LATENT_NODE_ID = '4';
-  const REF_IMAGE_NODE_ID = '10';
-  const SRC_IMAGE_NODE_ID = '20';
-  const CLIP_VISION_LOADER_NODE_ID = '21';
-  const IPADAPTER_MODEL_LOADER_NODE_ID = '22';
-  const CANNY_NODE_ID = '11';
-  const CONTROLNET_APPLY_NODE_ID = '13';
-  const IPADAPTER_ADV_NODE_ID = '23';
+  // Prefer resolving by _meta.title, and fall back to historical numeric ids.
+  const POS_NODE_ID = findNodeIdByTitle(workflow, 'POS_PROMPT', 'CLIPTextEncode') || '2';
+  const NEG_NODE_ID = findNodeIdByTitle(workflow, 'NEG_PROMPT', 'CLIPTextEncode') || '3';
+  const KSAMPLER_NODE_ID = findNodeIdByTitle(workflow, 'KSampler', 'KSampler') || '5';
+  const EMPTY_LATENT_NODE_ID = findNodeIdByTitle(workflow, 'Empty Latent (768x1376)', 'EmptyLatentImage') || '4';
+  const REF_IMAGE_NODE_ID = findNodeIdByTitle(workflow, 'REF_COMPOSITION', 'LoadImage') || '10';
+  const SRC_IMAGE_NODE_ID = findNodeIdByTitle(workflow, 'SRC_FEATURE_STYLE', 'LoadImage') || '20';
+  const CLIP_VISION_LOADER_NODE_ID = findNodeIdByTitle(workflow, 'CLIPVisionLoader', 'CLIPVisionLoader') || '21';
+  const IPADAPTER_MODEL_LOADER_NODE_ID = findNodeIdByTitle(workflow, 'IPAdapterModelLoader', 'IPAdapterModelLoader') || '22';
+  const CANNY_NODE_ID = findNodeIdByTitle(workflow, 'Canny Preprocessor', 'Canny') || '11';
+  const CONTROLNET_APPLY_NODE_ID = findNodeIdByTitle(workflow, 'ControlNetApply (Track A)', 'ControlNetApplyAdvanced') || '13';
+  const IPADAPTER_ADV_NODE_ID = findNodeIdByTitle(workflow, 'IPAdapterAdvanced (Track B)', 'IPAdapterAdvanced') || '23';
 
   const ipaCropPosition = process.env.IPADAPTER_CROP_POSITION; // e.g. "pad" to avoid center-crop
   const ipaInterpolation = process.env.IPADAPTER_INTERPOLATION || 'LANCZOS';

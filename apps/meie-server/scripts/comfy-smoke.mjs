@@ -12,7 +12,7 @@ function usage() {
       'ComfyUI smoke test',
       '',
       'Usage:',
-      '  node apps/meie-server/scripts/comfy-smoke.mjs [--base http://127.0.0.1:8000] [--workflow <path>]',
+      '  node apps/meie-server/scripts/comfy-smoke.mjs [--base http://127.0.0.1:8000] [--workflow <path>] [--mode lite|full|legacy]',
       '    [--ref <relpath>] [--src <relpath>] [--srcs a.png,b.png] [--require A,B,C]',
       '',
       'Env:',
@@ -74,6 +74,14 @@ function defaultWorkflowPath() {
   return path.resolve(repoRoot(), 'workflow_api.json');
 }
 
+function workflowPathForMode(mode) {
+  const m = String(mode || '').trim().toLowerCase();
+  if (m === 'full') return path.resolve(repoRoot(), 'workflow_api.full.json');
+  if (m === 'lite') return path.resolve(repoRoot(), 'workflow_api.lite.json');
+  if (m === 'legacy') return path.resolve(repoRoot(), 'workflow_api.json');
+  return null;
+}
+
 function loadWorkflow(p) {
   const text = fs.readFileSync(p, 'utf-8');
   return JSON.parse(text);
@@ -88,10 +96,28 @@ function listNodeTypes(workflow) {
   return Array.from(types).sort();
 }
 
+function findNodeIdByTitle(workflow, title, classType) {
+  const hits = [];
+  for (const [id, node] of Object.entries(workflow || {})) {
+    if (!node || typeof node !== 'object') continue;
+    const t = node?._meta?.title;
+    if (t !== title) continue;
+    if (classType && node.class_type !== classType) continue;
+    hits.push(id);
+  }
+  if (hits.length === 1) return hits[0];
+  if (hits.length > 1) {
+    // Deterministic tie-break: choose smallest numeric node id.
+    hits.sort((a, b) => (Number(a) || 0) - (Number(b) || 0));
+    return hits[0];
+  }
+  return null;
+}
+
 function patchInputImages(workflow, opts) {
-  // These node ids are what our repo workflow_api.json uses.
-  const REF_NODE_ID = '10';
-  const SRC_NODE_ID = '20';
+  // Prefer resolving by _meta.title; fall back to historical numeric ids.
+  const REF_NODE_ID = findNodeIdByTitle(workflow, 'REF_COMPOSITION', 'LoadImage') || '10';
+  const SRC_NODE_ID = findNodeIdByTitle(workflow, 'SRC_FEATURE_STYLE', 'LoadImage') || '20';
 
   if (opts.ref && workflow?.[REF_NODE_ID]?.inputs) {
     workflow[REF_NODE_ID].inputs.image = opts.ref;
@@ -128,7 +154,11 @@ async function main() {
     toBaseUrl(process.env.COMFYUI_API_BASE) ||
     'http://127.0.0.1:8000';
 
-  const workflowPath = argValue(argv, '--workflow') || defaultWorkflowPath();
+  const mode = argValue(argv, '--mode');
+  const workflowPath =
+    argValue(argv, '--workflow') ||
+    workflowPathForMode(mode) ||
+    defaultWorkflowPath();
   const requireCsv = argValue(argv, '--require');
   const requiredTypes = requireCsv
     ? requireCsv
@@ -143,6 +173,7 @@ async function main() {
 
   console.log(`[smoke] base=${base}`);
   console.log(`[smoke] workflow=${workflowPath}`);
+  if (mode) console.log(`[smoke] mode=${mode}`);
   if (ref) console.log(`[smoke] ref=${ref}`);
   if (src) console.log(`[smoke] src=${src}`);
   if (srcs.length > 0) console.log(`[smoke] srcs=${srcs.join(',')}`);

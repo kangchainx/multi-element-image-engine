@@ -16,3 +16,9 @@ declare module 'node:sqlite' {
   }
 }
 
+// Minimal declaration for ws (WebSocket client) to keep repo type-check green.
+declare module 'ws' {
+  const WebSocket: any;
+  export default WebSocket;
+}
+
