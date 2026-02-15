@@ -1,4 +1,4 @@
-# Multi-Element Image Engine (MEIE)
+# Multi-Element Image Engine
 
 一个把 **多张输入图片**（1 张参考图 `REF` + N 张素材图 `SRC`）组织成 **ComfyUI workflow** 并以 **Job 队列**方式运行的示例工程。
 
