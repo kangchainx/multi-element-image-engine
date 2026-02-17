@@ -246,10 +246,6 @@ taskkill /PID <pid> /T /F
 - `Invalid image file`：说明 workflow 里 `LoadImage` 指向的文件名在 ComfyUI input 下不存在或不是有效图片
 - 本项目会把上传图写入 `COMFY_INPUT_DIR/UPLOAD_SUBDIR/<jobId>/...`，并强制 workflow 只能读取这些上传文件
 
-### 3) 单 GPU 并发
-
-你只有 1 张 GPU 时，ComfyUI `/system_stats.devices=1` 正常；多开 Worker 通常不会带来“真正同时生成”。
-
 ## License
 
 MIT
