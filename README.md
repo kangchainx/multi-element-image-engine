@@ -224,22 +224,6 @@ Base URL：`http://127.0.0.1:8090`
 ### 取消任务
 - `POST /v1/jobs/:jobId/cancel`
 
-## 常见问题排查
-
-### 1) 端口被占用（EADDRINUSE）
-
-默认端口：
-- API：`8090`
-- UI：`5173`
-- ComfyUI：`8000`
-- Redis：`6379`
-
-Windows 查占用：
-```bash
-netstat -ano | findstr :8090
-taskkill /PID <pid> /T /F
-```
-
 ### 2) ComfyUI /prompt 400：missing_node_type / validation failed
 
 - `missing_node_type`：说明 workflow 用到的自定义节点没装（把 custom_nodes 安装齐）
