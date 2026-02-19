@@ -118,20 +118,6 @@ docker run --name redis-meie -p 6379:6379 -d redis:7
 
 最小可用示例（Windows 路径建议用正斜杠）：
 
-```env
-COMFYUI_API_BASE=http://127.0.0.1:8000
-REDIS_URL=redis://127.0.0.1:6379
-QUEUE_NAME=meie_jobs
-
-# 关键：指向 ComfyUI 的 input 目录（绝对路径）
-COMFY_INPUT_DIR=D:/develop/ComfyUI_Files/input
-UPLOAD_SUBDIR=meie_uploads
-OUTPUT_DIR_PREFIX=MEIE_RUNS
-
-HOST=0.0.0.0
-PORT=8090
-```
-
 说明：上传的图片会保存到：
 
 `COMFY_INPUT_DIR/UPLOAD_SUBDIR/<jobId>/ref.(png|jpg|webp)`
