@@ -206,12 +206,6 @@ Base URL：`http://127.0.0.1:8090`
 ### 取消任务
 - `POST /v1/jobs/:jobId/cancel`
 
-### 2) ComfyUI /prompt 400：missing_node_type / validation failed
-
-- `missing_node_type`：说明 workflow 用到的自定义节点没装（把 custom_nodes 安装齐）
-- `Invalid image file`：说明 workflow 里 `LoadImage` 指向的文件名在 ComfyUI input 下不存在或不是有效图片
-- 本项目会把上传图写入 `COMFY_INPUT_DIR/UPLOAD_SUBDIR/<jobId>/...`，并强制 workflow 只能读取这些上传文件
-
 ## License
 
 MIT
