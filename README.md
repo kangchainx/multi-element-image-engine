@@ -176,9 +176,6 @@ npm run dev
 
 Base URL：`http://127.0.0.1:8090`
 
-### 健康检查
-- `GET /healthz`
-
 ### 创建任务
 - `POST /v1/jobs`
 - Header：`X-User-Id: <string>`（用于按用户限流与历史查询）
